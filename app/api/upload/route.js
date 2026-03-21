@@ -1,0 +1,62 @@
+import { generateQuizFromPDF } from '@/lib/gemini'
+import { createClient } from '@/lib/supabase-server'
+
+// Exception note for teammates: this route requires Supabase auth cookies.
+// Terminal calls without session cookies will return 401 (Not logged in).
+async function requireAuthOrThrow(supabase) {
+  const { data: { user } } = await supabase.auth.getUser()
+
+  if (!user) {
+    throw new Error('Not logged in')
+  }
+
+  return user
+}
+
+// Accepts a PDF upload, generates quiz questions, stores a deck/cards, and returns deck metadata.
+export async function POST(request) {
+  try {
+    const formData = await request.formData()
+    const file = formData.get('file')
+
+    if (!file) {
+      return Response.json({ error: 'No file provided' }, { status: 400 })
+    }
+
+    // Check auth early to avoid running expensive Gemini generation for anonymous requests.
+    const supabase = await createClient()
+    const user = await requireAuthOrThrow(supabase)
+
+    // Convert file to buffer and generate quiz questions using Gemini
+    const buffer = Buffer.from(await file.arrayBuffer())
+    const quiz = await generateQuizFromPDF(buffer)
+
+    // Create a new deck for this PDF and insert generated cards
+    const { data: deck } = await supabase
+      .from('decks')
+      .insert({ user_id: user.id, title: file.name, source_filename: file.name })
+      .select()
+      .single()
+
+      // Map quiz questions to card records
+    const cards = quiz.questions.map(q => ({
+      deck_id: deck.id,
+      user_id: user.id,
+      question: q.question,
+      options: q.options,
+      answer: q.answer,
+      explanation: q.explanation
+    }))
+
+    await supabase.from('cards').insert(cards)
+
+    return Response.json({ success: true, deck_id: deck.id, card_count: cards.length })
+
+  } catch (e) {
+    if (e.message === 'Not logged in') {
+      return Response.json({ error: 'Not logged in' }, { status: 401 })
+    }
+
+    return Response.json({ error: e.message }, { status: 500 })
+  }
+}
