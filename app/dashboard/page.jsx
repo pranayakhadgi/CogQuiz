@@ -1,54 +1,29 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-
-const FAKE_DUE_CARDS = [
-  { id: 1, question: "What is the powerhouse of the cell?", deck: "Biology 101", difficulty: "easy" },
-  { id: 2, question: "What does DNA stand for?", deck: "Biology 101", difficulty: "medium" },
-  { id: 3, question: "What is Newton's First Law?", deck: "Physics 101", difficulty: "hard" },
-  { id: 4, question: "What is the speed of light?", deck: "Physics 101", difficulty: "easy" },
-  { id: 5, question: "What is the Krebs cycle?", deck: "Biology 101", difficulty: "hard" },
-]
-
-const FAKE_STATS = {
-  streak: 3,
-  totalStudied: 24,
-  accuracy: 78,
-  decks: 2
-}
+import { getDashboardData, getDueCards, getSession } from '../../lib/api'
 
 export default function DashboardPage() {
   const router = useRouter()
   const [authLoading, setAuthLoading] = useState(true)
+
+  // do we require a setCategory function here? 
+  const [categories, setCategories] = useState([])
   const [dueCards, setDueCards] = useState([])
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const checkAuth = async () => {
-      const fakeUser = null
-      setAuthLoading(false)
-    }
-    checkAuth()
-  }, [router])
+    getSession().then(session => {
 
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        // TODO: replace with real endpoints when Brizein is ready
-        // const res = await fetch('/api/cards/due')
-        // const data = await res.json()
-        // setDueCards(data.cards)
-        // setStats(data.stats)
-        setDueCards(FAKE_DUE_CARDS)
-        setStats(FAKE_STATS)
-      } catch (err) {
-        setDueCards(FAKE_DUE_CARDS)
-        setStats(FAKE_STATS)
+      // issue with not setting the authloda to be set either one to false
+      if (!session) {
+        router.push('/login')
+        return
       }
-      setLoading(false)
-    }
-    loadData()
+      getDashboardData().then(setCategories).catch(console.error)
+      getDueCards().then(setDueCards).catch(console.error)
+    })
   }, [])
 
   const getDifficultyColor = (difficulty) => {

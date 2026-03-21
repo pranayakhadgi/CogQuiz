@@ -2,7 +2,8 @@ import { getCardsByDeckId } from '@/lib/db'
 
 export async function GET(_request, { params }) {
   try {
-    const cards = await getCardsByDeckId(params.id)
+    const { id } = await params
+    const cards = await getCardsByDeckId(id)
     return Response.json({ success: true, cards })
   } catch (e) {
     if (e.message === 'Not authenticated') {
