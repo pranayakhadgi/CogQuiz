@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-
+import CogQuizLogo from '@/components/CogQuizLogo'
 const FAKE_DUE_CARDS = [
   { id: 1, question: "What is the powerhouse of the cell?", deck: "Biology 101", difficulty: "easy" },
   { id: 2, question: "What does DNA stand for?", deck: "Biology 101", difficulty: "medium" },
@@ -191,17 +191,9 @@ export default function DashboardPage() {
         zIndex: 10
       }}>
         <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
-          <div style={{
-            width: '34px', height: '34px',
-            backgroundColor: '#6B4226',
-            borderRadius: '10px',
-            display: 'flex', alignItems: 'center',
-            justifyContent: 'center', fontSize: '18px'
-          }}>
-            📚
-          </div>
+          <CogQuizLogo size = {36} />
           <span style={{ fontWeight:'700', color:'#3d2b1f', fontSize:'16px' }}>
-            StudySnap
+            CogQuiz
           </span>
         </div>
         <button
