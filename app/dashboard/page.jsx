@@ -17,7 +17,6 @@ const FAKE_STATS = {
   decks: 2
 }
 
-// ── count-up hook (visual only) ──────────────────────────
 function useCountUp(target, duration = 1000) {
   const [count, setCount] = useState(0)
   useEffect(() => {
@@ -41,7 +40,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [visible, setVisible] = useState(false)
 
-  // ── YOUR ORIGINAL AUTH — NOT TOUCHED ──────────────────
+  // ── YOUR ORIGINAL AUTH — NOT TOUCHED ──
   useEffect(() => {
     const checkAuth = async () => {
       const fakeUser = null
@@ -50,7 +49,7 @@ export default function DashboardPage() {
     checkAuth()
   }, [router])
 
-  // ── YOUR ORIGINAL DATA LOAD — NOT TOUCHED ─────────────
+  // ── YOUR ORIGINAL DATA LOAD — NOT TOUCHED ──
   useEffect(() => {
     const loadData = async () => {
       try {
@@ -61,26 +60,23 @@ export default function DashboardPage() {
         setStats(FAKE_STATS)
       }
       setLoading(false)
-      // trigger fade-in after data loads
       setTimeout(() => setVisible(true), 50)
     }
     loadData()
   }, [])
 
-  // ── YOUR ORIGINAL FUNCTION — NOT TOUCHED ──────────────
+  // ── YOUR ORIGINAL FUNCTION — NOT TOUCHED ──
   const getDifficultyColor = (difficulty) => {
     if (difficulty === 'easy') return { bg: '#d4edda', text: '#2d6a35' }
     if (difficulty === 'medium') return { bg: '#fff3cd', text: '#856404' }
     return { bg: '#fde8e8', text: '#8b2020' }
   }
 
-  // count-up values (visual only, reads from stats)
   const animatedStreak = useCountUp(stats?.streak ?? 0)
   const animatedAccuracy = useCountUp(stats?.accuracy ?? 0)
   const animatedStudied = useCountUp(stats?.totalStudied ?? 0)
   const animatedDecks = useCountUp(stats?.decks ?? 0)
 
-  // ── YOUR ORIGINAL LOADING STATES — NOT TOUCHED ────────
   if (authLoading) return (
     <div style={{ display:'flex', alignItems:'center',
       justifyContent:'center', height:'100vh',
@@ -112,15 +108,79 @@ export default function DashboardPage() {
       backgroundColor: '#f5f0e8',
       fontFamily: "'Inter', sans-serif",
       boxSizing: 'border-box',
+      position: 'relative',
+      overflow: 'hidden',
       opacity: visible ? 1 : 0,
       transform: visible ? 'translateY(0)' : 'translateY(16px)',
       transition: 'opacity 0.5s ease, transform 0.5s ease'
     }}>
 
-      {/* ── NAVBAR (new, visual only) ── */}
+      {/* ── ENHANCED CALM ANIMATED BACKGROUND ── */}
+      <div style={{
+        position: 'fixed',
+        inset: 0,
+        pointerEvents: 'none',
+        zIndex: 0,
+        overflow: 'hidden'
+      }}>
+        <div style={{
+          position: 'absolute',
+          top: '-150px', left: '-120px',
+          width: '600px', height: '600px',
+          borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(180,130,90,0.22) 0%, transparent 60%)',
+          animation: 'floatSlow1 18s ease-in-out infinite'
+        }}/>
+        <div style={{
+          position: 'absolute',
+          top: '-80px', right: '-100px',
+          width: '500px', height: '500px',
+          borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(210,185,150,0.24) 0%, transparent 60%)',
+          animation: 'floatSlow2 22s ease-in-out infinite'
+        }}/>
+        <div style={{
+          position: 'absolute',
+          bottom: '-120px', left: '25%',
+          width: '550px', height: '450px',
+          borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(160,110,70,0.20) 0%, transparent 60%)',
+          animation: 'floatSlow3 26s ease-in-out infinite'
+        }}/>
+        {/* breathing center glow */}
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: 'radial-gradient(circle at 50% 40%, rgba(255,255,255,0.60), transparent 300%)',
+          animation: 'breathe 10s ease-in-out infinite'
+        }}/>
+        {/* subtle moving light sweep */}
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: 'linear-gradient(120deg, transparent 40%, rgba(255,255,255,0.08), transparent 60%)',
+          animation: 'lightSweep 12s linear infinite'
+        }}/>
+        {/* grid */}
+        <div style={{
+          position: 'absolute', inset: 0,
+          backgroundImage: `
+            linear-gradient(rgba(107,66,38,0.03) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(107,66,38,0.03) 1px, transparent 1px)
+          `,
+          backgroundSize: '40px 40px'
+        }}/>
+        {/* vignette */}
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: 'radial-gradient(ellipse at center, transparent 60%, rgba(180,140,100,0.08) 100%)'
+        }}/>
+      </div>
+
+      {/* ── NAVBAR ── */}
       <nav style={{
-        backgroundColor: '#fffdf7',
-        borderBottom: '1px solid #e8ddd0',
+        backgroundColor: 'rgba(255,253,247,0.75)',
+        backdropFilter: 'blur(12px)',
+        WebkitBackdropFilter: 'blur(12px)',
+        borderBottom: '1px solid rgba(232,221,208,0.8)',
         padding: '0 20px',
         height: '60px',
         display: 'flex',
@@ -144,50 +204,35 @@ export default function DashboardPage() {
             StudySnap
           </span>
         </div>
-
-        <div style={{ display:'flex', gap:'8px' }}>
-          <button
-            onClick={() => router.push('/upload')}
-            style={{
-              padding: '8px 16px',
-              backgroundColor: '#6B4226',
-              color: 'white', border: 'none',
-              borderRadius: '8px', fontSize: '13px',
-              fontWeight: '600', cursor: 'pointer',
-              transition: 'transform 0.15s ease, background-color 0.15s ease'
-            }}
-            onMouseEnter={e => {
-              e.currentTarget.style.transform = 'translateY(-2px)'
-              e.currentTarget.style.backgroundColor = '#8B5E3C'
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.transform = 'translateY(0)'
-              e.currentTarget.style.backgroundColor = '#6B4226'
-            }}
-          >
-            + Upload
-          </button>
-          <button
-            onClick={() => router.push('/quiz')}
-            style={{
-              padding: '8px 16px',
-              backgroundColor: 'transparent',
-              color: '#6B4226',
-              border: '1px solid #6B4226',
-              borderRadius: '8px', fontSize: '13px',
-              fontWeight: '600', cursor: 'pointer',
-              transition: 'transform 0.15s ease'
-            }}
-            onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-2px)'}
-            onMouseLeave={e => e.currentTarget.style.transform = 'translateY(0)'}
-          >
-            Study Now
-          </button>
-        </div>
+        <button
+          onClick={() => router.push('/upload')}
+          style={{
+            padding: '8px 18px',
+            backgroundColor: '#6B4226',
+            color: 'white', border: 'none',
+            borderRadius: '8px', fontSize: '13px',
+            fontWeight: '600', cursor: 'pointer',
+            transition: 'transform 0.15s ease, background-color 0.15s ease'
+          }}
+          onMouseEnter={e => {
+            e.currentTarget.style.transform = 'translateY(-2px)'
+            e.currentTarget.style.backgroundColor = '#8B5E3C'
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.transform = 'translateY(0)'
+            e.currentTarget.style.backgroundColor = '#6B4226'
+          }}
+        >
+          + Upload
+        </button>
       </nav>
 
       {/* ── MAIN CONTENT ── */}
-      <div style={{ maxWidth:'560px', margin:'0 auto', padding:'28px 16px' }}>
+      <div style={{
+        maxWidth: '560px', margin: '0 auto',
+        padding: '28px 16px',
+        position: 'relative', zIndex: 1
+      }}>
 
         {/* Header */}
         <div style={{ marginBottom:'24px' }}>
@@ -201,11 +246,10 @@ export default function DashboardPage() {
           </p>
         </div>
 
-        {/* Stats Grid — count-up animation added */}
+        {/* Stats Grid */}
         {stats && (
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr',
             gap:'12px', marginBottom:'28px' }}>
-
             {[
               { emoji:'🔥', value: animatedStreak, label:'Day streak' },
               { emoji:'🎯', value: `${animatedAccuracy}%`, label:'Accuracy' },
@@ -214,23 +258,18 @@ export default function DashboardPage() {
             ].map((stat, i) => (
               <div
                 key={i}
+                className="stat-card"
                 style={{
-                  backgroundColor: '#fffdf7',
-                  border: '1px solid #e8ddd0',
+                  backgroundColor: 'rgba(255,253,247,0.85)',
+                  backdropFilter: 'blur(8px)',
+                  WebkitBackdropFilter: 'blur(8px)',
+                  border: '1px solid rgba(232,221,208,0.9)',
                   borderRadius: '14px',
                   padding: '18px',
                   boxSizing: 'border-box',
                   cursor: 'default',
                   transition: 'transform 0.2s ease, box-shadow 0.2s ease',
                   animation: `fadeUp 0.4s ease ${i * 0.08}s both`
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.transform = 'translateY(-4px)'
-                  e.currentTarget.style.boxShadow = '0 8px 20px rgba(107,66,38,0.12)'
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.transform = 'translateY(0)'
-                  e.currentTarget.style.boxShadow = 'none'
                 }}
               >
                 <div style={{ fontSize:'28px', marginBottom:'4px' }}>{stat.emoji}</div>
@@ -246,12 +285,17 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Due Today Section */}
-        <div style={{ backgroundColor:'#fffdf7',
-          border:'1px solid #e8ddd0', borderRadius:'16px',
-          padding:'20px', marginBottom:'20px',
-          animation:'fadeUp 0.4s ease 0.3s both' }}>
-
+        {/* Due Today */}
+        <div style={{
+          backgroundColor: 'rgba(255,253,247,0.85)',
+          backdropFilter: 'blur(8px)',
+          WebkitBackdropFilter: 'blur(8px)',
+          border: '1px solid rgba(232,221,208,0.9)',
+          borderRadius: '16px',
+          padding: '20px',
+          marginBottom: '20px',
+          animation: 'fadeUp 0.4s ease 0.3s both'
+        }}>
           <div style={{ display:'flex', justifyContent:'space-between',
             alignItems:'center', marginBottom:'16px' }}>
             <h2 style={{ color:'#3d2b1f', fontSize:'1.1rem',
@@ -282,10 +326,11 @@ export default function DashboardPage() {
                 return (
                   <div
                     key={card.id}
+                    className="card-row"
                     style={{
                       padding: '14px',
                       margin: '8px 0',
-                      backgroundColor: '#f5f0e8',
+                      backgroundColor: 'rgba(245,240,232,0.8)',
                       borderRadius: '10px',
                       display: 'flex',
                       justifyContent: 'space-between',
@@ -294,14 +339,6 @@ export default function DashboardPage() {
                       cursor: 'pointer',
                       transition: 'transform 0.15s ease, box-shadow 0.15s ease',
                       animation: `fadeUp 0.3s ease ${0.35 + i * 0.05}s both`
-                    }}
-                    onMouseEnter={e => {
-                      e.currentTarget.style.transform = 'translateY(-2px)'
-                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(107,66,38,0.1)'
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.transform = 'translateY(0)'
-                      e.currentTarget.style.boxShadow = 'none'
                     }}
                   >
                     <div style={{ flex:1, minWidth:0 }}>
@@ -326,6 +363,7 @@ export default function DashboardPage() {
               })}
 
               <button
+                className="primary-btn"
                 onClick={() => router.push('/quiz')}
                 style={{
                   width: '100%', padding: '13px',
@@ -334,14 +372,6 @@ export default function DashboardPage() {
                   fontSize: '15px', fontWeight: '600',
                   cursor: 'pointer', marginTop: '16px',
                   transition: 'transform 0.15s ease, background-color 0.15s ease'
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.transform = 'translateY(-2px)'
-                  e.currentTarget.style.backgroundColor = '#8B5E3C'
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.transform = 'translateY(0)'
-                  e.currentTarget.style.backgroundColor = '#6B4226'
                 }}
               >
                 Start Studying ({dueCards.length} cards) →
@@ -353,11 +383,51 @@ export default function DashboardPage() {
 
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
         @keyframes spin { to { transform: rotate(360deg); } }
+
         @keyframes fadeUp {
           from { opacity: 0; transform: translateY(16px); }
           to   { opacity: 1; transform: translateY(0); }
         }
+
+        @keyframes floatSlow1 {
+          0%, 100% { transform: translate(0, 0) scale(1); }
+          50% { transform: translate(40px, 30px) scale(1.08); }
+        }
+        @keyframes floatSlow2 {
+          0%, 100% { transform: translate(0, 0) scale(1); }
+          50% { transform: translate(-30px, 40px) scale(1.06); }
+        }
+        @keyframes floatSlow3 {
+          0%, 100% { transform: translate(0, 0) scale(1); }
+          50% { transform: translate(30px, -35px) scale(1.07); }
+        }
+        @keyframes breathe {
+          0%, 100% { opacity: 0.2; }
+          50% { opacity: 0.35; }
+        }
+        @keyframes lightSweep {
+          0% { transform: translateX(-100%); }
+          100% { transform: translateX(100%); }
+        }
+
+        .stat-card:hover {
+          transform: translateY(-4px) !important;
+          box-shadow: 0 8px 24px rgba(107,66,38,0.12) !important;
+        }
+        .card-row:hover {
+          transform: translateY(-2px) !important;
+          box-shadow: 0 4px 12px rgba(107,66,38,0.10) !important;
+        }
+        .primary-btn:hover {
+          transform: translateY(-2px) !important;
+          background-color: #8B5E3C !important;
+        }
+        .primary-btn:active {
+          transform: translateY(0px) !important;
+        }
+
         @media (max-width: 480px) {
           nav { padding: 0 12px !important; }
         }
