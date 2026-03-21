@@ -15,7 +15,8 @@ export default function LoginPage() {
   }
 
   const handleGoogleLogin = async () => {
-    console.log('google login clicked')
+    alert('google login clicked')
+    //await signInWithGoogle()
   }
 
   return (
