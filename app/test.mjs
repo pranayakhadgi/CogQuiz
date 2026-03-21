@@ -4,9 +4,8 @@ import {
     getInitialDashboard,
     getDueCards, 
     submitReview,
-    createFlashcard, 
-    calculateSM2 
-} from './core.js';
+    createFlashcard
+} from '../lib/db.js';
 
 async function runApplication() {
     console.log("Testing");

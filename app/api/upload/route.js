@@ -38,15 +38,25 @@ export async function POST(request) {
       .select()
       .single()
 
-      // Map quiz questions to card records
-    const cards = quiz.questions.map(q => ({
-      deck_id: deck.id,
-      user_id: user.id,
-      question: q.question,
-      options: q.options,
-      answer: q.answer,
-      explanation: q.explanation
-    }))
+      // Map quiz questions to card records (supports legacy and current Gemini shapes).
+      const cards = (quiz.questions || []).map(q => {
+        const normalizedOptions = Array.isArray(q.options)
+          ? q.options
+          : [q.options?.A, q.options?.B, q.options?.C, q.options?.D].filter(Boolean)
+
+        const normalizedAnswer = typeof q.answer === 'number'
+          ? q.answer
+          : ({ A: 0, B: 1, C: 2, D: 3 }[q.correct] ?? 0)
+
+        return {
+          deck_id: deck.id,
+          user_id: user.id,
+          question: q.question,
+          options: normalizedOptions,
+          answer: normalizedAnswer,
+          explanation: q.explanation
+        }
+      })
 
     await supabase.from('cards').insert(cards)
 

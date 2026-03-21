@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import Image from 'next/image'
+import { createClient } from '@/lib/supabase-browser'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
@@ -9,15 +10,29 @@ export default function LoginPage() {
   const [focused, setFocused] = useState('')
 
   const handleLogin = async () => {
-    setLoading(true)
-    console.log('logging in with', email, password)
-    setLoading(false)
+  setLoading(true)
+  const supabase = createClient()
+  const { error } = await supabase.auth.signInWithPassword({
+    email,
+    password
+  })
+  if (error) {
+    alert(error.message)
+  } else {
+    window.location.href = '/dashboard'
   }
+  setLoading(false)
+}
 
   const handleGoogleLogin = async () => {
-    alert('google login clicked')
-    //await signInWithGoogle()
-  }
+  const supabase = createClient()
+  await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: `${window.location.origin}/auth/callback`
+    }
+  })
+}
 
   return (
     <div style={{

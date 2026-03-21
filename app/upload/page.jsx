@@ -14,16 +14,31 @@ export default function UploadPage() {
 // change after pranay provides me the real auth function .
   useEffect(() => {
     const checkAuth = async () => {
-      const fakeUser = null
-      if (!fakeUser) {
-        router.push('/login')
-      } else {
-        setUser(fakeUser)
-      }
       setAuthLoading(false)
     }
     checkAuth()
   }, [router])
+
+  // Calls the backend upload route, which uses the prompt defined in lib/gemini.js.
+  const generateQuizViaGemini = async (file) => {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    return fetch('/api/upload', {
+      method: 'POST',
+      body: formData
+    })
+  }
+
+  const ensureDefaultCategory = async () => {
+    const res = await fetch('/api/categories/ensure', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'General' })
+    })
+
+    return res
+  }
 
   const handleUpload = async (file) => {
     if (!file || file.type !== 'application/pdf') {
@@ -33,12 +48,14 @@ export default function UploadPage() {
     setUploading(true)
     setError(null)
     try {
-      const formData = new FormData()
-      formData.append('file', file)
-      const uploadRes = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData
-      })
+      // Ensure a default category exists through db.js-backed API before upload workflow.
+      const categoryRes = await ensureDefaultCategory()
+      if (categoryRes.status === 401) {
+        router.push('/login')
+        return
+      }
+
+      const uploadRes = await generateQuizViaGemini(file)
       if (uploadRes.status === 401) {
         router.push('/login')
         return
@@ -56,6 +73,7 @@ export default function UploadPage() {
     setUploading(false)
   }
 
+  // we need a function that calls the backend(/lib/db.js) to fetch cards for the new deck, since the upload route only returns deck metadata. This is necessary to show the quiz preview on the upload page before navigating to the quiz interface.
   const fetchCards = async (id) => {
     try {
       const res = await fetch(`/api/decks/${id}/cards`)
