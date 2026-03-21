@@ -14,17 +14,36 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    getSession().then(session => {
+    let active = true
 
-      // issue with not setting the authloda to be set either one to false
-      if (!session) {
-        router.push('/login')
-        return
-      }
-      getDashboardData().then(setCategories).catch(console.error)
-      getDueCards().then(setDueCards).catch(console.error)
-    })
-  }, [])
+    getSession()
+      .then(session => {
+        if (!session) {
+          router.push('/login')
+          return Promise.resolve()
+        }
+
+        return Promise.all([
+          getDashboardData().then((data) => {
+            if (active) setCategories(Array.isArray(data) ? data : [])
+          }),
+          getDueCards().then((data) => {
+            if (active) setDueCards(Array.isArray(data) ? data : [])
+          })
+        ])
+      })
+      .catch(console.error)
+      .finally(() => {
+        if (active) {
+          setAuthLoading(false)
+          setLoading(false)
+        }
+      })
+
+    return () => {
+      active = false
+    }
+  }, [router])
 
   const getDifficultyColor = (difficulty) => {
     if (difficulty === 'easy') return { bg: '#d4edda', text: '#2d6a35' }
