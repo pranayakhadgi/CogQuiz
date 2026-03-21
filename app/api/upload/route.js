@@ -30,14 +30,51 @@ export async function POST(request) {
     const user = await requireAuthOrThrow(supabase)
 
     // Convert file to buffer and generate quiz questions using Gemini
-    console.log("Is this even working? ")
+    console.log('Generating quiz from PDF...')
     const buffer = Buffer.from(await file.arrayBuffer())
     const quiz = await generateQuizFromPDF(buffer)
-    console.log("It might be")
+    console.log('Quiz generated successfully:', quiz.category)
+
+    // Ensure a profile exists to satisfy foreign key constraints on the categories table
+    const { error: profileError } = await supabase
+      .from('profiles')
+      .upsert({ id: user.id }) // Basic upsert to ensure the row exists
+    
+    if (profileError) {
+      console.warn('Profile sync skipped or failed (might already exist):', profileError.message)
+    }
+
     // Create a new deck for this PDF and insert generated cards
+    const categoryName = quiz.category || 'Uploaded'
+
+    // Use a safer find-or-create pattern instead of assumed upsert constraints
+    let { data: category, error: catError } = await supabase
+      .from('categories')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('name', categoryName)
+      .maybeSingle()
+
+    if (catError) throw new Error(catError.message)
+
+    if (!category) {
+      console.log('Creating new category for user:', user.id)
+      const { data: newCat, error: createError } = await supabase
+        .from('categories')
+        .insert({ user_id: user.id, name: categoryName })
+        .select()
+        .single()
+
+      if (createError) {
+        console.error('Category creation failed:', createError)
+        throw new Error(`Category creation failed: ${createError.message} (User: ${user.id})`)
+      }
+      category = newCat
+    }
+
     const { data: deck } = await supabase
       .from('decks')
-      .insert({ user_id: user.id, title: file.name, source_filename: file.name })
+      .insert({ user_id: user.id, category_id: category.id, title: file.name, source_filename: file.name })
       .select()
       .single()
 
@@ -70,8 +107,9 @@ export async function POST(request) {
     console.error("🔥 CRASH IN API ROUTE:", err); 
     
     // 2. Send the actual error message back to the browser for easier debugging
-    return NextResponse.json(
+    return Response.json(
       { error: err.message || 'Internal server error' }, 
       { status: 500 }
     );
   }
+}

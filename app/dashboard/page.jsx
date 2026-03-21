@@ -21,35 +21,57 @@ function useCountUp(target, duration = 1000) {
 export default function DashboardPage() {
   const router = useRouter()
   const [authLoading, setAuthLoading] = useState(true)
+  const [categories, setCategories] = useState([])
   const [dueCards, setDueCards] = useState([])
-  const [stats, setStats] = useState(null)
+  const [stats, setStats] = useState({
+    streak: 0,
+    accuracy: 0,
+    totalStudied: 0,
+    decks: 0
+  })
   const [loading, setLoading] = useState(true)
   const [visible, setVisible] = useState(false)
 
   // ── YOUR ORIGINAL AUTH — NOT TOUCHED ──
   useEffect(() => {
-    const checkAuth = async () => {
-      const fakeUser = null
-      setAuthLoading(false)
-    }
-    checkAuth()
-  }, [router])
+    let active = true;
 
-  // ── YOUR ORIGINAL DATA LOAD — NOT TOUCHED ──
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        setDueCards(FAKE_DUE_CARDS)
-        setStats(FAKE_STATS)
-      } catch (err) {
-        setDueCards(FAKE_DUE_CARDS)
-        setStats(FAKE_STATS)
-      }
-      setLoading(false)
-      setTimeout(() => setVisible(true), 50)
-    }
-    loadData()
-  }, [])
+    getSession()
+      .then((session) => {
+        if (!session) {
+          router.push("/login");
+          return;
+        }
+
+        // Parallel fetch for categories/decks and due cards
+        return Promise.all([
+          getDashboardData().then((data) => {
+            if (active) {
+              const cats = Array.isArray(data) ? data : [];
+              setCategories(cats);
+              // Simple stat calculation for now
+              setStats(prev => ({
+                ...prev,
+                decks: cats.reduce((sum, c) => sum + (c.decks?.length || 0), 0)
+              }));
+            }
+          }),
+          getDueCards().then((data) => {
+            if (active) setDueCards(Array.isArray(data) ? data : []);
+          }),
+        ]);
+      })
+      .catch(console.error)
+      .finally(() => {
+        if (active) {
+          setAuthLoading(false);
+          setLoading(false);
+          setVisible(true);
+        }
+      });
+
+    return () => { active = false; };
+  }, [router]);
 
   // ── YOUR ORIGINAL FUNCTION — NOT TOUCHED ──
   const getDifficultyColor = (difficulty) => {
@@ -64,10 +86,12 @@ export default function DashboardPage() {
   const animatedDecks = useCountUp(stats?.decks ?? 0)
 
   if (authLoading) return (
-    <div style={{ display:'flex', alignItems:'center',
-      justifyContent:'center', height:'100vh',
-      backgroundColor:'#f5f0e8', color:'#6B4226',
-      fontFamily:"'Inter', sans-serif" }}>
+    <div style={{
+      display: 'flex', alignItems: 'center',
+      justifyContent: 'center', height: '100vh',
+      backgroundColor: '#f5f0e8', color: '#6B4226',
+      fontFamily: "'Inter', sans-serif"
+    }}>
       Checking session...
     </div>
   )
@@ -130,7 +154,7 @@ export default function DashboardPage() {
           borderRadius: '50%',
           background: 'radial-gradient(circle, rgba(180,130,90,0.22) 0%, transparent 60%)',
           animation: 'floatSlow1 18s ease-in-out infinite'
-        }}/>
+        }} />
         <div style={{
           position: 'absolute',
           top: '-80px', right: '-100px',
@@ -138,7 +162,7 @@ export default function DashboardPage() {
           borderRadius: '50%',
           background: 'radial-gradient(circle, rgba(210,185,150,0.24) 0%, transparent 60%)',
           animation: 'floatSlow2 22s ease-in-out infinite'
-        }}/>
+        }} />
         <div style={{
           position: 'absolute',
           bottom: '-120px', left: '25%',
@@ -146,19 +170,19 @@ export default function DashboardPage() {
           borderRadius: '50%',
           background: 'radial-gradient(circle, rgba(160,110,70,0.20) 0%, transparent 60%)',
           animation: 'floatSlow3 26s ease-in-out infinite'
-        }}/>
+        }} />
         {/* breathing center glow */}
         <div style={{
           position: 'absolute', inset: 0,
           background: 'radial-gradient(circle at 50% 40%, rgba(255,255,255,0.60), transparent 300%)',
           animation: 'breathe 10s ease-in-out infinite'
-        }}/>
+        }} />
         {/* subtle moving light sweep */}
         <div style={{
           position: 'absolute', inset: 0,
           background: 'linear-gradient(120deg, transparent 40%, rgba(255,255,255,0.08), transparent 60%)',
           animation: 'lightSweep 12s linear infinite'
-        }}/>
+        }} />
         {/* grid */}
         <div style={{
           position: 'absolute', inset: 0,
@@ -167,12 +191,12 @@ export default function DashboardPage() {
             linear-gradient(90deg, rgba(107,66,38,0.03) 1px, transparent 1px)
           `,
           backgroundSize: '40px 40px'
-        }}/>
+        }} />
         {/* vignette */}
         <div style={{
           position: 'absolute', inset: 0,
           background: 'radial-gradient(ellipse at center, transparent 60%, rgba(180,140,100,0.08) 100%)'
-        }}/>
+        }} />
       </div>
 
       {/* ── NAVBAR ── */}
@@ -190,7 +214,7 @@ export default function DashboardPage() {
         top: 0,
         zIndex: 10
       }}>
-        <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <div style={{
             width: '34px', height: '34px',
             backgroundColor: '#6B4226',
@@ -200,7 +224,7 @@ export default function DashboardPage() {
           }}>
             📚
           </div>
-          <span style={{ fontWeight:'700', color:'#3d2b1f', fontSize:'16px' }}>
+          <span style={{ fontWeight: '700', color: '#3d2b1f', fontSize: '16px' }}>
             StudySnap
           </span>
         </div>
@@ -235,26 +259,30 @@ export default function DashboardPage() {
       }}>
 
         {/* Header */}
-        <div style={{ marginBottom:'24px' }}>
-          <h1 style={{ color:'#3d2b1f', fontSize:'1.8rem',
-            fontWeight:'700', margin:'0 0 4px' }}>
+        <div style={{ marginBottom: '24px' }}>
+          <h1 style={{
+            color: '#3d2b1f', fontSize: '1.8rem',
+            fontWeight: '700', margin: '0 0 4px'
+          }}>
             Dashboard
           </h1>
-          <p style={{ color:'#8a6a50', margin:0, fontSize:'14px' }}>
+          <p style={{ color: '#8a6a50', margin: 0, fontSize: '14px' }}>
             {new Date().toLocaleDateString('en-US',
-              { weekday:'long', month:'long', day:'numeric' })}
+              { weekday: 'long', month: 'long', day: 'numeric' })}
           </p>
         </div>
 
         {/* Stats Grid */}
         {stats && (
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr',
-            gap:'12px', marginBottom:'28px' }}>
+          <div style={{
+            display: 'grid', gridTemplateColumns: '1fr 1fr',
+            gap: '12px', marginBottom: '28px'
+          }}>
             {[
-              { emoji:'🔥', value: animatedStreak, label:'Day streak' },
-              { emoji:'🎯', value: `${animatedAccuracy}%`, label:'Accuracy' },
-              { emoji:'📚', value: animatedStudied, label:'Cards studied' },
-              { emoji:'🗂️', value: animatedDecks, label:'Decks' },
+              { emoji: '🔥', value: animatedStreak, label: 'Day streak' },
+              { emoji: '🎯', value: `${animatedAccuracy}%`, label: 'Accuracy' },
+              { emoji: '📚', value: animatedStudied, label: 'Cards studied' },
+              { emoji: '🗂️', value: animatedDecks, label: 'Decks' },
             ].map((stat, i) => (
               <div
                 key={i}
@@ -272,18 +300,70 @@ export default function DashboardPage() {
                   animation: `fadeUp 0.4s ease ${i * 0.08}s both`
                 }}
               >
-                <div style={{ fontSize:'28px', marginBottom:'4px' }}>{stat.emoji}</div>
-                <div style={{ fontSize:'1.8rem', fontWeight:'700',
-                  color:'#6B4226', lineHeight:1 }}>
+                <div style={{ fontSize: '28px', marginBottom: '4px' }}>{stat.emoji}</div>
+                <div style={{
+                  fontSize: '1.8rem', fontWeight: '700',
+                  color: '#6B4226', lineHeight: 1
+                }}>
                   {stat.value}
                 </div>
-                <div style={{ color:'#8a6a50', fontSize:'13px', marginTop:'4px' }}>
+                <div style={{ color: '#8a6a50', fontSize: '13px', marginTop: '4px' }}>
                   {stat.label}
                 </div>
               </div>
             ))}
           </div>
         )}
+
+        {/* Categories Section */}
+        <div style={{ marginBottom: '28px' }}>
+          <h2 style={{
+            color: '#3d2b1f', fontSize: '1.1rem',
+            fontWeight: '600', marginBottom: '16px'
+          }}>
+            Your Subjects
+          </h2>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))',
+            gap: '12px'
+          }}>
+            {categories.map((category, i) => (
+              <div
+                key={category.id}
+                className="category-box"
+                style={{
+                  backgroundColor: 'rgba(255,253,247,0.85)',
+                  backdropFilter: 'blur(8px)',
+                  border: '1px solid rgba(232,221,208,0.9)',
+                  borderRadius: '16px',
+                  padding: '16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  textAlign: 'center',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                  animation: `fadeUp 0.4s ease ${0.4 + i * 0.05}s both`
+                }}
+              >
+                <div style={{ fontSize: '28px', marginBottom: '8px' }}>📚</div>
+                <div style={{
+                  fontWeight: '700', color: '#6B4226',
+                  fontSize: '14px', marginBottom: '4px',
+                  overflow: 'hidden', textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap', width: '100%'
+                }}>
+                  {category.name}
+                </div>
+                <div style={{ color: '#8a6a50', fontSize: '12px' }}>
+                  {category.decks?.length || 0} Decks
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
 
         {/* Due Today */}
         <div style={{
@@ -296,10 +376,14 @@ export default function DashboardPage() {
           marginBottom: '20px',
           animation: 'fadeUp 0.4s ease 0.3s both'
         }}>
-          <div style={{ display:'flex', justifyContent:'space-between',
-            alignItems:'center', marginBottom:'16px' }}>
-            <h2 style={{ color:'#3d2b1f', fontSize:'1.1rem',
-              fontWeight:'600', margin:0 }}>
+          <div style={{
+            display: 'flex', justifyContent: 'space-between',
+            alignItems: 'center', marginBottom: '16px'
+          }}>
+            <h2 style={{
+              color: '#3d2b1f', fontSize: '1.1rem',
+              fontWeight: '600', margin: 0
+            }}>
               Due Today
             </h2>
             <span
@@ -354,15 +438,17 @@ export default function DashboardPage() {
                       animation: `fadeUp 0.3s ease ${0.35 + i * 0.05}s both`
                     }}
                   >
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <p style={{ color:'#3d2b1f', margin:'0 0 4px',
-                        fontSize:'14px', fontWeight:'500',
-                        overflow:'hidden', textOverflow:'ellipsis',
-                        whiteSpace:'nowrap' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{
+                        color: '#3d2b1f', margin: '0 0 4px',
+                        fontSize: '14px', fontWeight: '500',
+                        overflow: 'hidden', textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}>
                         {card.question}
                       </p>
-                      <p style={{ color:'#8a6a50', margin:0, fontSize:'12px' }}>
-                        {card.deck}
+                      <p style={{ color: '#8a6a50', margin: 0, fontSize: '12px' }}>
+                        {card.deck} • {categories.find(c => c.id === card.category_id)?.name || 'General'}
                       </p>
                     </div>
                     <span
@@ -435,6 +521,12 @@ export default function DashboardPage() {
         .stat-card:hover {
           transform: translateY(-4px) !important;
           box-shadow: 0 8px 24px rgba(107,66,38,0.12) !important;
+        }
+        .category-box:hover {
+          transform: translateY(-4px) !important;
+          background-color: #fff !important;
+          box-shadow: 0 8px 20px rgba(107,66,38,0.10) !important;
+          border-color: #6B4226 !important;
         }
         .card-row:hover {
           transform: translateY(-2px) !important;

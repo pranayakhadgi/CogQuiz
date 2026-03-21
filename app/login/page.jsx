@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
+import { signInWithGoogle, signInWithEmail } from '@/lib/api'
 import CogQuizLogo from '@/components/CogQuizLogo'
 export default function LoginPage() {
   const [email, setEmail] = useState('')
