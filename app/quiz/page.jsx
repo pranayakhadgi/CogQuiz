@@ -1,17 +1,19 @@
 'use client'
 import { useState, useEffect, use } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 // for the google calendar api
 import { scheduleReviewSession } from '@/lib/api'
 
 
-export default function QuizPage({ params }) {
+export default function QuizPage() {
 
   // TODO: replace with real endpoint when Brizein is ready
-  // const cards == await getCardsByDeck(deckId)
-  const resolvedParams = use(params)
-  const deckId = resolvedParams.id //deck id
-
+  //const cards == await getCardsByDeck(deckId)
+   console.log("wasssup ")
+  const resolvedParams = useSearchParams()
+  console.log(resolvedParams)
+const deckId = resolvedParams.get('deckId')
+console.log(deckId)
   const router = useRouter()
   const [cards, setCards] = useState([])
   const [loading, setLoading] = useState(true)
@@ -31,11 +33,15 @@ export default function QuizPage({ params }) {
      */
     const loadCards = async () => {
       if (!deckId) return
-
       try {
-        const res = await fetch(`/api/decks/${deckId}/cards`)
-        const data = await res.json()
+      const res = await fetch("/api/cards", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ deckId: deckId}), // <-- Added this!
+              });
 
+        const data = await res.json()
+            console.log("hello" + data)
         if (data.success && data.cards && data.cards.length > 0) {
           // Normalize DB data to match our JSON UI format (Options as {A: "...", B: "..."})
           const normalized = data.cards.map(c => ({
@@ -55,7 +61,7 @@ export default function QuizPage({ params }) {
           setCards(FAKE_CARDS)
         }
       } catch (err) {
-        setCards(FAKE_CARDS)
+            console.log(err)
       }
       setLoading(false)
     }

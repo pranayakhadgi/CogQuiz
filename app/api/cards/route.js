@@ -1,10 +1,15 @@
-import { getAllCategories} from '@/lib/db'
+import {getDueCards} from '@/lib/db'
 
 export async function POST(request) {
   try {
-    const category = await getAllCategories()
 
-    return Response.json({ success: true, category })
+    const body = await request.json();
+    const { deckId } = body;
+
+    const cards = await getDueCards(deckId)
+    
+    console.log("yea I gut the cards" + cards)
+    return Response.json({ success: true, cards })
   } catch (e) {
     if (e.message === 'Not authenticated') {
       return Response.json({ error: 'Not logged in' }, { status: 401 })
