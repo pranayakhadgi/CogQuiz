@@ -2,34 +2,63 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse } from 'next/server'
 
 export async function middleware(request) {
-  const response = NextResponse.next()
+  let response = NextResponse.next({
+    request: {
+      headers: request.headers,
+    },
+  })
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  if (!supabaseUrl || !supabaseKey) {
+    // Fail gracefully if env vars are missing
+    return response
+  }
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    supabaseUrl,
+    supabaseKey,
     {
       cookies: {
-        getAll() { return request.cookies.getAll() },
+        getAll() {
+          return request.cookies.getAll()
+        },
         setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
+          response = NextResponse.next({
+            request,
+          })
           cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options))
-        }
-      }
+            response.cookies.set(name, value, options)
+          )
+        },
+      },
     }
   )
 
-  const { data: { session } } = await supabase.auth.getSession()
+  try {
+    const { data: { user } } = await supabase.auth.getUser()
+    const { pathname } = request.nextUrl
 
-  const { pathname } = request.nextUrl
+    if (user && (pathname === '/login' || pathname === '/signup')) {
+      const redirectResponse = NextResponse.redirect(new URL('/dashboard', request.url))
+      // Copy cookies over to the redirect response
+      response.cookies.getAll().forEach((cookie) => {
+        redirectResponse.cookies.set(cookie.name, cookie.value, { ...cookie })
+      })
+      return redirectResponse
+    }
 
-  // If logged in and trying to access login/signup, send to dashboard
-  if (session && (pathname === '/login' || pathname === '/signup')) {
-    return NextResponse.redirect(new URL('/dashboard', request.url))
-  }
-
-  // If NOT logged in and trying to access protected pages, send to login
-  if (!session && (pathname === '/dashboard' || pathname === '/upload' || pathname === '/quiz')) {
-    return NextResponse.redirect(new URL('/login', request.url))
+    if (!user && (pathname === '/dashboard' || pathname === '/upload' || pathname === '/quiz')) {
+      const redirectResponse = NextResponse.redirect(new URL('/login', request.url))
+      response.cookies.getAll().forEach((cookie) => {
+        redirectResponse.cookies.set(cookie.name, cookie.value, { ...cookie })
+      })
+      return redirectResponse
+    }
+  } catch (error) {
+    console.error('Middleware auth error:', error)
   }
 
   return response
