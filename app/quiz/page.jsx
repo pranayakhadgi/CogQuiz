@@ -1,17 +1,19 @@
 'use client'
-import { useState, useEffect, Suspense } from 'react'
-import { useRouter } from 'next/navigation'
-import { useSearchParams } from 'next/navigation'
+import { useState, useEffect, use } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 
 
 
-export default function QuizPage({ params }) {
+
+export default function QuizPage() {
 
   // TODO: replace with real endpoint when Brizein is ready
-  // const cards == await getCardsByDeck(deckId)
-  const searchParams = useSearchParams()
-  const deckId = searchParams.get('deckId')
-
+  //const cards == await getCardsByDeck(deckId)
+   console.log("wasssup ")
+  const resolvedParams = useSearchParams()
+  console.log(resolvedParams)
+const deckId = resolvedParams.get('deckId')
+console.log(deckId)
   const router = useRouter()
   const [cards, setCards] = useState([])
   const [loading, setLoading] = useState(true)
@@ -21,41 +23,51 @@ export default function QuizPage({ params }) {
   const [score, setScore] = useState(0)
   const [finished, setFinished] = useState(false)
 
- useEffect(() => {
-  const loadCards = async () => {
-    if (!deckId) {
-      setLoading(false)
-      return
-    }
-    try {
-      const res = await fetch(`/api/decks/${deckId}/cards`)
-      const data = await res.json()
-      if (data.success && data.cards && data.cards.length > 0) {
-        const normalized = data.cards.map(c => ({
-          ...c,
-          options: Array.isArray(c.options)
-            ? c.options.reduce((acc, opt, i) => {
-                acc[String.fromCharCode(65 + i)] = opt
-                return acc
-              }, {})
-            : c.options,
-          answer: typeof c.answer === 'number'
-            ? String.fromCharCode(65 + c.answer)
-            : c.answer
-        }))
-        setCards(normalized)
-      } else {
-        setCards([])
+  useEffect(() => {
+    /**
+     * @function loadCards
+     * @description Fetches cards for the current deck from the database.
+     * Normalized data ensures compatibility between the database format 
+     * (arrays/numbers) and our UI format (objects/keys).
+     * Brizein: This replaces the FAKE_CARDS once the upload integration is stable.
+     */
+    const loadCards = async () => {
+      if (!deckId) return
+      try {
+      const res = await fetch("/api/cards", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ deckId: deckId}), // <-- Added this!
+              });
+
+        const data = await res.json()
+            console.log("hello" + data)
+        if (data.success && data.cards && data.cards.length > 0) {
+          // Normalize DB data to match our JSON UI format (Options as {A: "...", B: "..."})
+          const normalized = data.cards.map(c => ({
+            ...c,
+            options: Array.isArray(c.options) 
+              ? c.options.reduce((acc, opt, i) => { 
+                  acc[String.fromCharCode(65 + i)] = opt; 
+                  return acc; 
+                }, {}) 
+              : c.options,
+            answer: typeof c.answer === 'number' 
+              ? String.fromCharCode(65 + c.answer) 
+              : c.answer
+          }))
+          setCards(normalized)
+        } else {
+          setCards(FAKE_CARDS)
+        }
+      } catch (err) {
+            console.log(err)
       }
-    } catch (err) {
-      console.error('Quiz load error:', err)
-      setCards([])
-    } finally {
       setLoading(false)
     }
-  }
-  loadCards()
-}, [deckId])
+    loadCards()
+  }, [deckId])
+
   const handleAnswer = (option) => {
     if (answered) return
     setSelected(option)

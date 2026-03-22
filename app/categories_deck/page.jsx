@@ -342,7 +342,7 @@ export default function CategoriesPage() {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            router.push(`/quiz/${deck.id}`);
+                            router.push(`/quiz?deckId=${deck.id}`)
                           }}
                           style={{
                             padding: "8px 16px",
