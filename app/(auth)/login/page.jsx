@@ -1,6 +1,5 @@
 "use client";
-import { useState } from "react";
-import { createClient } from "@/lib/supabase-browser";
+import { useState, useEffect } from "react";
 import { signInWithGoogle, signInWithEmail } from "@/services/api";
 import CogQuizLogo from "@/components/CogQuizLogo";
 
@@ -9,7 +8,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [focused, setFocused] = useState("");
-  const [showPassword, setShowPassword] = useState(false); // ← add this
+  const [showPassword, setShowPassword] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("error") === "auth_callback_failed") {
+      alert("Google sign-in didn't complete. Please try again or use email.");
+    }
+  }, []);
 
   const handleLogin = async () => {
     setLoading(true);
@@ -24,7 +30,8 @@ export default function LoginPage() {
   };
 
   const handleGoogleLogin = async () => {
-    await signInWithGoogle();
+    const { error } = await signInWithGoogle();
+    if (error) alert(error.message);
   };
 
   return (

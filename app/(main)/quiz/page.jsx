@@ -18,7 +18,10 @@ function QuizContent() {
 
   useEffect(() => {
     const loadCards = async () => {
-      if (!deckId) return;
+      if (!deckId) {
+        setLoading(false);
+        return;
+      }
       try {
         const res = await fetch(`/api/cards?deckId=${deckId}`, {
           method: "GET",
@@ -42,7 +45,9 @@ function QuizContent() {
         } else {
           setCards([]);
         }
-      } catch (err) {}
+      } catch (err) {
+        console.error("Failed to load cards:", err);
+      }
       setLoading(false);
     };
     loadCards();
@@ -58,22 +63,12 @@ function QuizContent() {
   };
 
   const handleNext = async () => {
-    // we never call the sm-2 algo
-    const param = {
-      card: cards[current],
-      userScore: rating,
-    };
-
-    try {
-      // we dont need to await this, we can just queue this in the back
-      fetch("/api/cards", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(param), // Ensure this is a string!
-      });
-    } catch (e) {
-      console.error("Error updating card", e.message);
-    }
+    // Fire-and-forget SM-2 update; the server loads the card and recomputes its schedule.
+    fetch("/api/cards", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: cards[current].id, userScore: rating }),
+    }).catch((e) => console.error("Error updating card", e.message));
 
     if (current + 1 >= cards.length) {
       //try {

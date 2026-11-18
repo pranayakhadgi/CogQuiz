@@ -14,7 +14,6 @@ export async function signInWithGoogle() {
       queryParams: {
         access_type: 'offline',
         prompt: 'consent',
-        ux_mode: 'popup'
       },
     }
   });
@@ -32,9 +31,15 @@ export async function signInWithEmail(email, password) {
 
 export async function signUpWithEmail(email, password) {
   const supabase = createClient();
-  const { data, error } = await supabase.auth.signUp({ email, password });
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+  });
   if (error) throw new Error(error.message);
-  return data;
+  // If "Confirm email" is enabled in Supabase, no session is returned until the
+  // user clicks the link in their inbox.
+  return { ...data, needsConfirmation: !data.session };
 }
 
 export async function signOut() {
@@ -51,8 +56,6 @@ export async function getSession() {
   return session;
 }
 
-// this function is having the internal server eorr - the error 500)
-// we are already the server why tf are we doing this??
 export async function processUploadedPdf(file) {
   if (!file || file.type !== "application/pdf") {
     throw new Error("Please upload a PDF file only.");
@@ -70,7 +73,10 @@ export async function processUploadedPdf(file) {
       body: formData, // Do NOT set 'Content-Type' headers when sending FormData
     });
 
-    const data = await response.json();
+    // A platform timeout / crash returns HTML, not JSON — don't let that mask the real error.
+    const data = await response.json().catch(() => ({
+      error: `Server error (${response.status}). The PDF may be too large or processing timed out.`,
+    }));
 
     if (!response.ok) {
       // Throw the error message sent from our server
@@ -88,13 +94,11 @@ export async function processUploadedPdf(file) {
 // QUIZ
 // ================================
 
-// this should be in the db.js file
-// FIXME:
 export async function submitCardReview(cardId, rating) {
-  const response = await fetch("/api/cards/review", {
-    method: "POST",
+  const response = await fetch("/api/cards", {
+    method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ card_id: cardId, rating }),
+    body: JSON.stringify({ cardId, userScore: rating }),
   });
 
   const result = await response.json();

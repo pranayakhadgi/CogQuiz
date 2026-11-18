@@ -26,7 +26,7 @@ export default function UploadPage() {
       setUploading(true);
       const newDeckId = await processUploadedPdf(file);
       setUploading(false);
-      router.push(`/dashboard/`);
+      router.push(newDeckId ? `/quiz?deckId=${newDeckId}` : "/dashboard");
     } catch (err) {
       setUploading(false);
       setError(err.message);

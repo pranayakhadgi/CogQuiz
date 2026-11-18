@@ -178,6 +178,8 @@ export async function createFlashcard({
         repetitions,
         easiness_factor: ease_factor,
         interval_days: prev_interval,
+        // New cards are due immediately so they show up in the first quiz.
+        due_date: new Date().toISOString().split("T")[0],
       },
     ])
     .select()
@@ -212,6 +214,10 @@ export async function getAllCategories() {
 
 export async function getDueDecksByCategory(categoryId) {
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Not authenticated");
 
   const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
 
@@ -227,21 +233,25 @@ export async function getDueDecksByCategory(categoryId) {
     )
     // Note: If cards doesn't have a category_id, we filter via the joined deck
     .eq("decks.category_id", categoryId)
+    .eq("user_id", user.id)
     .lte("due_date", today);
 
   if (error) throw error;
 
   // 2. Quickly extract the unique full deck objects
   const uniqueDecks = Array.from(
-    new Map(cards_due_today.map((card) => [card.deck_id, card.decks])).values(),
+    new Map((cards_due_today || []).map((card) => [card.deck_id, card.decks])).values(),
   );
 
-  if (error) throw error;
   return uniqueDecks;
 }
 
 export async function getDueCardsByDeck(deckId) {
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Not authenticated");
 
   const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
 
@@ -249,19 +259,36 @@ export async function getDueCardsByDeck(deckId) {
     .from("cards") // was 'flashcards'
     .select("*")
     .eq("deck_id", deckId)
-    .lte("due_date", today) // was 'next_review' — matches your schema
+    .eq("user_id", user.id)
+    .lte("due_date", today)
     .order("due_date", { ascending: true });
 
   if (error) throw error;
   return data;
 }
-export async function updateCard(card, userScore) {
+export async function updateCard(cardId, userScore) {
   const supabase = await createClient();
-  console.log("before: ", card);
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Not authenticated");
+
+  // Load the card from the DB (never trust SM-2 state sent by the client).
+  const { data: card, error: fetchError } = await supabase
+    .from("cards")
+    .select("id, repetitions, easiness_factor, interval_days")
+    .eq("id", cardId)
+    .eq("user_id", user.id)
+    .single();
+  if (fetchError) throw new Error(fetchError.message);
+
+  card.repetitions = card.repetitions ?? 0;
+  card.interval_days = card.interval_days ?? 0;
+  card.easiness_factor = card.easiness_factor ?? 2.5;
 
   const q = Math.max(0, Math.min(5, userScore));
 
-  // Fix: Use card. prefix for all properties
   if (q >= 3) {
     if (card.repetitions === 0) {
       card.interval_days = 1;
@@ -297,12 +324,14 @@ export async function updateCard(card, userScore) {
       interval_days: card.interval_days,
       due_date: card.due_date,
     })
-    .eq("id", card.id);
+    .eq("id", card.id)
+    .eq("user_id", user.id);
 
   if (error) {
     console.error("Supabase Error:", error);
     throw error;
   }
+  return card;
 }
 
 export async function getCardsByDeckId(deckId) {

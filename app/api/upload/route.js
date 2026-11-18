@@ -1,67 +1,67 @@
-// app/api/upload-pdf/route.js
 import { NextResponse } from "next/server";
-// Import your secure backend functions here instead of the frontend
 import { generateQuizFromPDF } from "@/lib/gemini";
+import { createClient } from "@/lib/supabase-server";
 import {
   getOrCreateCategory,
   getOrCreateDeck,
   createFlashcard,
 } from "@/services/db";
 
+// Gemini can take a while on long PDFs; give the serverless function room.
+export const maxDuration = 60;
+
+const MAX_BYTES = 20 * 1024 * 1024; // Gemini inline-data limit
+
 export async function POST(request) {
   try {
-    // 1. Extract the file from the incoming request
+    // Check auth before spending a Gemini call.
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "Not logged in" }, { status: 401 });
+    }
+
     const formData = await request.formData();
     const file = formData.get("file");
 
-    if (!file) {
+    if (!file || typeof file === "string") {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
+    }
+    if (file.type !== "application/pdf") {
+      return NextResponse.json({ error: "Please upload a PDF file." }, { status: 400 });
+    }
+    if (file.size > MAX_BYTES) {
+      return NextResponse.json({ error: "PDF is too large (max 20 MB)." }, { status: 413 });
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    // specific gemini call
     const quizData = await generateQuizFromPDF(buffer);
-    if (quizData.status === 401) {
-      return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+
+    if (!quizData || !Array.isArray(quizData.questions) || quizData.questions.length === 0) {
+      return NextResponse.json(
+        { error: "Couldn't generate questions from this PDF." },
+        { status: 502 },
+      );
     }
-    // now we are going to generate the categories
-    const category_id = await getOrCreateCategory(quizData.category);
 
-    // this can change to our specifications
-    const new_deck_id = await getOrCreateDeck(category_id, file.name);
+    const categoryId = await getOrCreateCategory(quizData.category || "General");
+    const deckId = await getOrCreateDeck(categoryId, file.name);
 
-    // Inside your route.js, after you create the newDeckId
-
-    // okay so this might be slow, we can use other aproaches.
-    // but if we make it an array of promises maybe when we return the database might
-    // not be finished with the insertion yet. Oh well.
-    // Use a standard 'for...of' loop for async operations
     for (const item of quizData.questions) {
       await createFlashcard({
-        deckId: new_deck_id, // Make sure this is just the string!
+        deckId,
         question: item.question,
         optionsPayload: item.options,
         correct_awnser: item.correct,
         explanation: item.explanation,
       });
     }
-    // Once the loop finishes, ALL cards are safely in the database
-    return NextResponse.json(
-      { success: true, deck_id: new_deck_id },
-      { status: 200 },
-    );
 
-    if (!uploadRes.ok) {
-      return NextResponse.json(
-        { error: "Failed to generate quiz." },
-        { status: 500 },
-      );
-    }
-    return NextResponse.json(
-      { success: true, deck_id: 100001 },
-      { status: 200 },
-    );
+    return NextResponse.json({ success: true, deck_id: deckId }, { status: 200 });
   } catch (err) {
+    console.error("Upload error:", err);
     return NextResponse.json(
       { error: err.message || "Internal server error" },
       { status: 500 },

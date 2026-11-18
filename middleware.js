@@ -50,7 +50,7 @@ export async function middleware(request) {
       return redirectResponse
     }
 
-    if (!user && (pathname === '/dashboard' || pathname === '/upload' || pathname === '/quiz')) {
+    if (!user && ['/dashboard', '/upload', '/quiz', '/categories_deck'].includes(pathname)) {
       const redirectResponse = NextResponse.redirect(new URL('/login', request.url))
       response.cookies.getAll().forEach((cookie) => {
         redirectResponse.cookies.set(cookie.name, cookie.value, { ...cookie })
@@ -65,5 +65,5 @@ export async function middleware(request) {
 }
 
 export const config = {
-  matcher: ['/dashboard', '/upload', '/quiz', '/login', '/signup']
+  matcher: ['/dashboard', '/upload', '/quiz', '/categories_deck', '/login', '/signup']
 }

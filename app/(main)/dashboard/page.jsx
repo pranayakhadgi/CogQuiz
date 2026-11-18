@@ -2,7 +2,6 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { getSession } from "@/services/api";
-import { getDashboardData, getDueCards } from "@/services/db";
 import CogQuizLogo from "@/components/CogQuizLogo";
 
 function useCountUp(target, duration = 1000) {

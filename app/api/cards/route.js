@@ -30,10 +30,13 @@ export async function GET(request) {
 export async function PATCH(request) {
   try {
     const body = await request.json();
-    const card = body.card;
-    const userScore = body.userScore;
-    await updateCard(card, userScore);
-    return;
+    const cardId = body.cardId ?? body.card?.id;
+    const userScore = Number(body.userScore);
+    if (!cardId || !Number.isFinite(userScore)) {
+      return Response.json({ error: "cardId and numeric userScore are required" }, { status: 400 });
+    }
+    const card = await updateCard(cardId, userScore);
+    return Response.json({ success: true, card });
   } catch (e) {
     if (e.message === "Not authenticated") {
       return Response.json({ error: "Not logged in" }, { status: 401 });

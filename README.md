@@ -44,7 +44,16 @@ GOOGLE_CALENDAR_CLIENT_SECRET=your_client_secret
 GEMINI_API_KEY=your_gemini_api_key
 ```
 
-3. Start the development server:
+   (`GOOGLE_AI_API_KEY` is still accepted as a fallback name for the Gemini key.)
+
+3. Configure Supabase auth for every environment you deploy to. In **Supabase → Authentication → URL Configuration**:
+   - **Site URL**: your production domain (e.g. `https://cog-quiz.vercel.app`)
+   - **Redirect URLs**: add `http://localhost:3000/auth/callback` and `https://cog-quiz.vercel.app/auth/callback` (plus `https://*-<team>.vercel.app/auth/callback` for preview deploys)
+   - In **Authentication → Providers → Google**, the Google Cloud OAuth client must list `https://<project>.supabase.co/auth/v1/callback` as an authorized redirect URI.
+
+   Set the same env vars in **Vercel → Project → Settings → Environment Variables** for Production.
+
+4. Start the development server:
 
 ```bash
 npm run dev

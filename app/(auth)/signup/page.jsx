@@ -26,7 +26,11 @@ export default function SignupPage() {
     }
     setLoading(true)
     try {
-      await signUpWithEmail(email, password)
+      const { needsConfirmation } = await signUpWithEmail(email, password)
+      if (needsConfirmation) {
+        setError('Account created! Check your email for a confirmation link, then sign in.')
+        return
+      }
       window.location.href = '/dashboard'
     } catch (e) {
       setError(e.message)
@@ -36,7 +40,8 @@ export default function SignupPage() {
   }
 
   const handleGoogleSignup = async () => {
-    await signInWithGoogle()
+    const { error } = await signInWithGoogle()
+    if (error) setError(error.message)
   }
 
   return (

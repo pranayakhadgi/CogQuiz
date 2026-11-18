@@ -1,11 +1,9 @@
-// same thing with this thing, remove the whole api folder
-
-import { getDueCards } from "@/services/db";
+import { getCardsByDeckId } from "@/services/db";
 
 export async function GET(_request, { params }) {
   try {
     const { id } = await params;
-    const cards = await getDueCards(id);
+    const cards = await getCardsByDeckId(id);
 
     return Response.json({ success: true, cards });
   } catch (e) {
