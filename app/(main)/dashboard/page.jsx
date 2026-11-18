@@ -1,142 +1,145 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { getSession } from "@/services/api";
-import { getDashboardData, getDueCards } from "@/services/db";
+import { getSession, signOut } from "@/services/api";
 import CogQuizLogo from "@/components/CogQuizLogo";
+import { getStudyStats } from "@/components/studyStats";
 
 function useCountUp(target, duration = 1000) {
+  const safeTarget =
+    Number.isFinite(Number(target)) && Number(target) > 0
+      ? Math.round(Number(target))
+      : 0;
   const [count, setCount] = useState(0);
   useEffect(() => {
-    let start = 0;
-    const step = target / (duration / 16);
-    const timer = setInterval(() => {
-      start += step;
-      if (start >= target) {
-        setCount(target);
-        clearInterval(timer);
-      } else setCount(Math.floor(start));
-    }, 16);
-    return () => clearInterval(timer);
-  }, [target, duration]);
+    let frame;
+    const startTime = performance.now();
+    const tick = (now) => {
+      const progress = Math.min(1, (now - startTime) / duration);
+      setCount(Math.floor(safeTarget * progress));
+      if (progress < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [safeTarget, duration]);
   return count;
 }
 
+const onKeyActivate = (handler) => (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    handler();
+  }
+};
+
 export default function DashboardPage() {
   const router = useRouter();
-  const [authLoading, setAuthLoading] = useState(true);
   const [categories, setCategories] = useState([]);
   const [dueCards, setDueCards] = useState([]);
   const [stats, setStats] = useState({
     streak: 0,
     accuracy: 0,
     totalStudied: 0,
-    decks: 0,
+    categories: 0,
   });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [visible, setVisible] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
     let active = true;
 
-    // 1. Define an async worker function inside the effect
     const loadDashboardData = async () => {
       try {
-        // Step A: Check Authentication first
         const session = await getSession();
         if (!session) {
-          router.push("/login");
+          router.replace("/login");
           return;
         }
 
-        // Step B & C: Fire both requests and capture their Responses
         const [dashboardRes, dueCardsRes] = await Promise.all([
-          fetch("/api/dashboard", { method: "GET" }),
-          fetch("/api/cards", { method: "GET" }),
+          fetch("/api/dashboard", { cache: "no-store" }),
+          fetch("/api/cards", { cache: "no-store" }),
         ]);
 
-        // Now we can check .ok on the actual Response objects
+        if (dashboardRes.status === 401 || dueCardsRes.status === 401) {
+          router.replace("/login");
+          return;
+        }
+
+        const [dashboardJson, dueCardsJson] = await Promise.all([
+          dashboardRes.json().catch(() => ({})),
+          dueCardsRes.json().catch(() => ({})),
+        ]);
+
         if (!dashboardRes.ok) {
           throw new Error(
-            `Dashboard HTTP error! status: ${dashboardRes.status}`,
+            dashboardJson.error ||
+              `Couldn't load your categories (HTTP ${dashboardRes.status}).`,
           );
         }
         if (!dueCardsRes.ok) {
-          throw new Error(`Cards HTTP error! status: ${dueCardsRes.status}`);
+          throw new Error(
+            dueCardsJson.error ||
+              `Couldn't load your due cards (HTTP ${dueCardsRes.status}).`,
+          );
         }
 
-        // Step C.2: Parse the JSON data from both responses
-        // We use Promise.all again here so it parses both at the exact same time!
-        const [dashboardJson, dueCardsJson] = await Promise.all([
-          dashboardRes.json(),
-          dueCardsRes.json(),
-        ]);
-
-        // Extract the actual array from your backend's { success: true, data: [...] } format
-        const dashboardData = dashboardJson.data;
-        const dueCardsData = dueCardsJson.cards;
-
-        // Step D: Safely update React State
+        if (!active) return;
+        const cats = Array.isArray(dashboardJson.data)
+          ? dashboardJson.data
+          : [];
+        setCategories(cats);
+        setDueCards(
+          Array.isArray(dueCardsJson.cards) ? dueCardsJson.cards : [],
+        );
+        setStats({
+          ...getStudyStats(session.user?.id),
+          categories: cats.length,
+        });
+        setError(null);
+        setLoading(false);
+        setVisible(true);
+      } catch (err) {
+        console.error("Error loading dashboard:", err);
         if (active) {
-          // 1. Handle Categories & Stats
-          const cats = Array.isArray(dashboardData) ? dashboardData : [];
-
-          setCategories(cats);
-          setStats((prev) => ({
-            ...prev,
-            decks: cats.reduce((sum, c) => sum + (c.decks?.length || 0), 0),
-          }));
-
-          setDueCards(Array.isArray(dueCardsData) ? dueCardsData : []);
-        }
-      } catch (error) {
-        console.error("Error loading dashboard:", error);
-      } finally {
-        // Step E: Clean up loading states
-        if (active) {
-          setAuthLoading(false);
+          setError(
+            err.message || "Something went wrong loading your dashboard.",
+          );
           setLoading(false);
           setVisible(true);
         }
       }
     };
-    // 2. Actually call the function we just defined
     loadDashboardData();
 
-    // 3. Cleanup function if the user navigates away before data loads
     return () => {
       active = false;
     };
-  }, [router]);
+  }, [router, reloadKey]);
 
-  // ── YOUR ORIGINAL FUNCTION — NOT TOUCHED ──
-  const getDifficultyColor = (difficulty) => {
-    if (difficulty === "easy") return { bg: "#d4edda", text: "#2d6a35" };
-    if (difficulty === "medium") return { bg: "#fff3cd", text: "#856404" };
-    return { bg: "#fde8e8", text: "#8b2020" };
+  const handleRetry = () => {
+    setError(null);
+    setLoading(true);
+    setReloadKey((k) => k + 1);
   };
 
-  const animatedStreak = useCountUp(stats?.streak ?? 50);
-  const animatedAccuracy = useCountUp(stats?.accuracy ?? 70);
-  const animatedStudied = useCountUp(stats?.totalStudied ?? 99);
-  const animatedDecks = useCountUp(stats?.decks ?? 0);
+  const handleSignOut = async () => {
+    setSigningOut(true);
+    try {
+      await signOut();
+    } catch (err) {
+      console.error("Sign out failed:", err);
+      setSigningOut(false);
+    }
+  };
 
-  if (authLoading)
-    return (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          height: "100vh",
-          backgroundColor: "#f5f0e8",
-          color: "#6B4226",
-          fontFamily: "'Inter', sans-serif",
-        }}
-      >
-        Checking session...
-      </div>
-    );
+  const animatedStreak = useCountUp(stats.streak);
+  const animatedAccuracy = useCountUp(stats.accuracy);
+  const animatedStudied = useCountUp(stats.totalStudied);
+  const animatedCategories = useCountUp(stats.categories);
 
   if (loading)
     return (
@@ -151,7 +154,7 @@ export default function DashboardPage() {
           fontFamily: "'Inter', sans-serif",
         }}
       >
-        <div style={{ textAlign: "center" }}>
+        <div style={{ textAlign: "center" }} role="status">
           <div
             style={{
               width: "36px",
@@ -165,16 +168,28 @@ export default function DashboardPage() {
           />
           Loading your dashboard...
         </div>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       </div>
     );
 
-  // Group due cards by category
+  // Group due cards by category. Cards carry category_id when the API adds it;
+  // otherwise fall back to the deck -> category mapping from /api/dashboard.
+  const deckToCategory = {};
+  categories.forEach((cat) =>
+    (cat.decks || []).forEach((d) => {
+      deckToCategory[d.id] = cat.id;
+    }),
+  );
+  const dueByCategory = {};
+  dueCards.forEach((card) => {
+    const catId = card.category_id ?? deckToCategory[card.deck_id];
+    if (catId == null) return;
+    dueByCategory[catId] = (dueByCategory[catId] || 0) + 1;
+  });
   const categoriesWithDue = categories
-    .map((cat) => ({
-      ...cat,
-      dueCount: dueCards.filter((c) => c.category_id === cat.id).length,
-    }))
-    .filter((cat) => cat.dueCount > 0);
+    .map((cat) => ({ ...cat, dueCount: dueByCategory[cat.id] || 0 }))
+    .filter((cat) => cat.dueCount > 0)
+    .sort((a, b) => b.dueCount - a.dueCount);
 
   return (
     <div
@@ -303,30 +318,51 @@ export default function DashboardPage() {
             CogQuiz
           </span>
         </div>
-        <button
-          onClick={() => router.push("/upload")}
-          style={{
-            padding: "8px 18px",
-            backgroundColor: "#6B4226",
-            color: "white",
-            border: "none",
-            borderRadius: "8px",
-            fontSize: "13px",
-            fontWeight: "600",
-            cursor: "pointer",
-            transition: "transform 0.15s ease, background-color 0.15s ease",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.transform = "translateY(-2px)";
-            e.currentTarget.style.backgroundColor = "#8B5E3C";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.transform = "translateY(0)";
-            e.currentTarget.style.backgroundColor = "#6B4226";
-          }}
-        >
-          + Upload
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <button
+            type="button"
+            onClick={handleSignOut}
+            disabled={signingOut}
+            style={{
+              padding: "8px 14px",
+              backgroundColor: "transparent",
+              color: "#6B4226",
+              border: "1px solid #6B4226",
+              borderRadius: "8px",
+              fontSize: "13px",
+              fontWeight: "600",
+              cursor: signingOut ? "not-allowed" : "pointer",
+              opacity: signingOut ? 0.6 : 1,
+            }}
+          >
+            {signingOut ? "Signing out..." : "Sign out"}
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push("/upload")}
+            style={{
+              padding: "8px 18px",
+              backgroundColor: "#6B4226",
+              color: "white",
+              border: "none",
+              borderRadius: "8px",
+              fontSize: "13px",
+              fontWeight: "600",
+              cursor: "pointer",
+              transition: "transform 0.15s ease, background-color 0.15s ease",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = "translateY(-2px)";
+              e.currentTarget.style.backgroundColor = "#8B5E3C";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = "translateY(0)";
+              e.currentTarget.style.backgroundColor = "#6B4226";
+            }}
+          >
+            + Upload
+          </button>
+        </div>
       </nav>
 
       {/* ── MAIN CONTENT ── */}
@@ -360,8 +396,46 @@ export default function DashboardPage() {
           </p>
         </div>
 
+        {error && (
+          <div
+            role="alert"
+            style={{
+              backgroundColor: "#fff0f0",
+              border: "1px solid #ffcccc",
+              borderRadius: "10px",
+              padding: "14px 16px",
+              marginBottom: "20px",
+              color: "#cc4444",
+              fontSize: "14px",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: "12px",
+            }}
+          >
+            <span>⚠️ {error}</span>
+            <button
+              type="button"
+              onClick={handleRetry}
+              style={{
+                background: "none",
+                border: "1px solid #cc4444",
+                borderRadius: "8px",
+                padding: "4px 10px",
+                cursor: "pointer",
+                color: "#cc4444",
+                fontSize: "13px",
+                fontWeight: "600",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
         {/* Stats Grid */}
-        {stats && (
+        {
           <div
             style={{
               display: "grid",
@@ -376,8 +450,8 @@ export default function DashboardPage() {
               { emoji: "📚", value: animatedStudied, label: "Cards studied" },
               {
                 emoji: "🗂️",
-                value: animatedDecks,
-                label: "Category",
+                value: animatedCategories,
+                label: stats.categories === 1 ? "Category" : "Categories",
                 clickable: true,
               },
             ].map((stat, i) => (
@@ -386,9 +460,15 @@ export default function DashboardPage() {
                 className={
                   stat.clickable ? "stat-card category-card" : "stat-card"
                 }
-                onClick={() =>
-                  stat.clickable && router.push("/categories_deck")
-                }
+                {...(stat.clickable && {
+                  role: "button",
+                  tabIndex: 0,
+                  "aria-label": `${stats.categories} categories, view all`,
+                  onClick: () => router.push("/categories_deck"),
+                  onKeyDown: onKeyActivate(() =>
+                    router.push("/categories_deck"),
+                  ),
+                })}
                 style={{
                   backgroundColor: "rgba(255,253,247,0.85)",
                   backdropFilter: "blur(8px)",
@@ -443,196 +523,143 @@ export default function DashboardPage() {
               </div>
             ))}
           </div>
-        )}
+        }
 
         {/* Due Today */}
-        <div
-          style={{
-            backgroundColor: "rgba(255,253,247,0.85)",
-            backdropFilter: "blur(8px)",
-            WebkitBackdropFilter: "blur(8px)",
-            border: "1px solid rgba(232,221,208,0.9)",
-            borderRadius: "16px",
-            padding: "20px",
-            marginBottom: "20px",
-            animation: "fadeUp 0.4s ease 0.3s both",
-          }}
-        >
+        {!error && (
           <div
             style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginBottom: "16px",
+              backgroundColor: "rgba(255,253,247,0.85)",
+              backdropFilter: "blur(8px)",
+              WebkitBackdropFilter: "blur(8px)",
+              border: "1px solid rgba(232,221,208,0.9)",
+              borderRadius: "16px",
+              padding: "20px",
+              marginBottom: "20px",
+              animation: "fadeUp 0.4s ease 0.3s both",
             }}
           >
-            <h2
+            <div
               style={{
-                color: "#3d2b1f",
-                fontSize: "1.1rem",
-                fontWeight: "600",
-                margin: 0,
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "16px",
               }}
             >
-              Due Today
-            </h2>
-            <span
-              style={{
-                backgroundColor: "#6B4226",
-                color: "white",
-                borderRadius: "99px",
-                padding: "3px 10px",
-                fontSize: "13px",
-                fontWeight: "600",
-              }}
-            >
-              {categoriesWithDue.length > 0
-                ? categoriesWithDue.length
-                : categories.length}{" "}
-              subjects
-            </span>
-          </div>
-
-          {dueCards.length === 0 ? (
-            <div style={{ textAlign: "center", padding: "32px 0" }}>
-              <div style={{ fontSize: "40px", marginBottom: "12px" }}>✅</div>
-              <p
+              <h2
                 style={{
-                  color: "#6B4226",
+                  color: "#3d2b1f",
+                  fontSize: "1.1rem",
                   fontWeight: "600",
-                  margin: "0 0 4px",
+                  margin: 0,
                 }}
               >
-                All caught up!
-              </p>
-              <p style={{ color: "#8a6a50", fontSize: "13px", margin: 0 }}>
-                No cards due today. Upload more lectures!
-              </p>
+                Due Today
+              </h2>
+              <span
+                style={{
+                  backgroundColor: "#6B4226",
+                  color: "white",
+                  borderRadius: "99px",
+                  padding: "3px 10px",
+                  fontSize: "13px",
+                  fontWeight: "600",
+                }}
+              >
+                {categoriesWithDue.length}{" "}
+                {categoriesWithDue.length === 1 ? "subject" : "subjects"}
+              </span>
             </div>
-          ) : (
-            <>
-              {categoriesWithDue.length > 0
-                ? categoriesWithDue.map((cat, i) => (
-                    <div
-                      key={cat.id}
-                      className="card-row"
-                      onClick={() => router.push("/categories_deck")}
-                      style={{
-                        padding: "14px",
-                        margin: "8px 0",
-                        backgroundColor: "rgba(245,240,232,0.8)",
-                        borderRadius: "10px",
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        gap: "12px",
-                        cursor: "pointer",
-                        transition:
-                          "transform 0.15s ease, box-shadow 0.15s ease",
-                        animation: `fadeUp 0.3s ease ${0.35 + i * 0.05}s both`,
-                      }}
-                    >
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <p
-                          style={{
-                            color: "#3d2b1f",
-                            margin: "0 0 4px",
-                            fontSize: "14px",
-                            fontWeight: "600",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {cat.name}
-                        </p>
-                        <p
-                          style={{
-                            color: "#8a6a50",
-                            margin: 0,
-                            fontSize: "12px",
-                          }}
-                        >
-                          {cat.dueCount} cards due today
-                        </p>
-                      </div>
-                      <span
+
+            {categoriesWithDue.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "32px 0" }}>
+                <div style={{ fontSize: "40px", marginBottom: "12px" }}>✅</div>
+                <p
+                  style={{
+                    color: "#6B4226",
+                    fontWeight: "600",
+                    margin: "0 0 4px",
+                  }}
+                >
+                  All caught up!
+                </p>
+                <p style={{ color: "#8a6a50", fontSize: "13px", margin: 0 }}>
+                  No cards due today. Upload more lectures!
+                </p>
+              </div>
+            ) : (
+              <>
+                {categoriesWithDue.map((cat, i) => (
+                  <div
+                    key={cat.id}
+                    className="card-row"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() =>
+                      router.push(`/categories_deck?open=${cat.id}`)
+                    }
+                    onKeyDown={onKeyActivate(() =>
+                      router.push(`/categories_deck?open=${cat.id}`),
+                    )}
+                    style={{
+                      padding: "14px",
+                      margin: "8px 0",
+                      backgroundColor: "rgba(245,240,232,0.8)",
+                      borderRadius: "10px",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: "12px",
+                      cursor: "pointer",
+                      transition: "transform 0.15s ease, box-shadow 0.15s ease",
+                      animation: `fadeUp 0.3s ease ${0.35 + i * 0.05}s both`,
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p
                         style={{
-                          backgroundColor: "#6B4226",
-                          color: "white",
-                          borderRadius: "99px",
-                          padding: "3px 10px",
-                          fontSize: "12px",
+                          color: "#3d2b1f",
+                          margin: "0 0 4px",
+                          fontSize: "14px",
                           fontWeight: "600",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
                           whiteSpace: "nowrap",
                         }}
                       >
-                        {cat.dueCount} due
-                      </span>
-                    </div>
-                  ))
-                : categories.map((cat, i) => (
-                    <div
-                      key={cat.id}
-                      className="card-row"
-                      onClick={() => router.push("/categories_deck")}
-                      style={{
-                        padding: "14px",
-                        margin: "8px 0",
-                        backgroundColor: "rgba(245,240,232,0.8)",
-                        borderRadius: "10px",
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        gap: "12px",
-                        cursor: "pointer",
-                        transition:
-                          "transform 0.15s ease, box-shadow 0.15s ease",
-                        animation: `fadeUp 0.3s ease ${0.35 + i * 0.05}s both`,
-                      }}
-                    >
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <p
-                          style={{
-                            color: "#3d2b1f",
-                            margin: "0 0 4px",
-                            fontSize: "14px",
-                            fontWeight: "600",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {cat.name}
-                        </p>
-                        <p
-                          style={{
-                            color: "#8a6a50",
-                            margin: 0,
-                            fontSize: "12px",
-                          }}
-                        >
-                          {dueCards.length} cards due today
-                        </p>
-                      </div>
-                      <span
+                        {cat.name}
+                      </p>
+                      <p
                         style={{
-                          backgroundColor: "#6B4226",
-                          color: "white",
-                          borderRadius: "99px",
-                          padding: "3px 10px",
+                          color: "#8a6a50",
+                          margin: 0,
                           fontSize: "12px",
-                          fontWeight: "600",
-                          whiteSpace: "nowrap",
                         }}
                       >
-                        {dueCards.length} due
-                      </span>
+                        {cat.dueCount} {cat.dueCount === 1 ? "card" : "cards"}{" "}
+                        due today
+                      </p>
                     </div>
-                  ))}
-            </>
-          )}
-        </div>
+                    <span
+                      style={{
+                        backgroundColor: "#6B4226",
+                        color: "white",
+                        borderRadius: "99px",
+                        padding: "3px 10px",
+                        fontSize: "12px",
+                        fontWeight: "600",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {cat.dueCount} due
+                    </span>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       <style>{`

@@ -1,83 +1,122 @@
-"use server";
+// Server-only data access layer. Previously marked "use server", which turned
+// every export into a public Server Action endpoint callable from any client;
+// nothing uses them as actions (only API route handlers import this file).
+import "server-only";
 import { createClient } from "@/lib/supabase-server.js";
+import { HttpError, unauthorized } from "@/lib/api-errors.js";
+import { sm2, todayUTC } from "@/lib/sm2.js";
+import { questionKey } from "@/lib/quiz-format.js";
 
-// ==========================================
-// 1. DASHBOARD BOOTSTRAPPING
-// ==========================================
+// Schema used (inferred from the app; nothing else is assumed):
+//   categories(id, name, user_id)
+//   decks(id, title, category_id -> categories.id, user_id)
+//   cards(id, deck_id -> decks.id, user_id, question, options jsonb {A..D},
+//         answer 'A'..'D', explanation, repetitions, easiness_factor,
+//         interval_days, due_date date)
 
-export async function getDashboardData() {
+const PAGE_SIZE = 1000; // Supabase/PostgREST default max rows per request
+
+async function getContext() {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) throw new Error("Not authenticated");
-
-  const { data: categories, error: categoriesError } = await supabase
-    .from("categories")
-    .select("*") // * gets all fields
-    .eq("user_id", user.id);
-
-  if (categoriesError) throw new Error(categoriesError.message);
-
-  const { data: decks, error: decksError } = await supabase
-    .from("decks")
-    .select("id, title, category_id")
-    .eq("user_id", user.id);
-
-  if (decksError) throw new Error(decksError.message);
-
-  const decksByCategory = (decks || []).reduce((acc, deck) => {
-    const key = deck.category_id;
-    if (!acc[key]) acc[key] = [];
-    acc[key].push({ id: deck.id, title: deck.title });
-    return acc;
-  }, {});
-
-  return (categories || []).map((category) => ({
-    ...category,
-    decks: decksByCategory[category.id] || [],
-  }));
+  if (!user) throw unauthorized();
+  return { supabase, user };
 }
-export async function getDueCards() {
-  const supabase = await createClient();
-  const today = new Date().toISOString().split("T")[0];
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("Not authenticated");
 
-  const { data: cards, error: cardsError } = await supabase
-    .from("cards")
-    .select("id, question, due_date, deck_id")
-    .eq("user_id", user.id)
-    .lte("due_date", today)
-    .order("due_date", { ascending: true });
+/** Read every row of a query, paging past PostgREST's max-rows cap. */
+async function fetchAll(buildQuery) {
+  const rows = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await buildQuery().range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    rows.push(...(data || []));
+    if (!data || data.length < PAGE_SIZE) return rows;
+  }
+}
 
-  if (cardsError) throw new Error(cardsError.message);
+// PostgREST embedded counts come back as [{ count: n }].
+const embeddedCount = (v) => (Array.isArray(v) ? (v[0]?.count ?? 0) : 0);
 
-  const deckIds = [
-    ...new Set((cards || []).map((card) => card.deck_id).filter(Boolean)),
-  ];
-  let deckMap = {};
+const DECK_WITH_COUNTS =
+  "id, title, category_id, card_count:cards(count), due_cards:cards(count)";
 
-  if (deckIds.length > 0) {
-    const { data: decks, error: decksError } = await supabase
+function shapeDeck(deck) {
+  return {
+    id: deck.id,
+    title: deck.title,
+    category_id: deck.category_id,
+    card_count: embeddedCount(deck.card_count),
+    due_count: embeddedCount(deck.due_cards),
+  };
+}
+
+// ==========================================
+// 1. DASHBOARD
+// ==========================================
+
+/**
+ * Categories with their decks and card counts:
+ * [{ ...category, deck_count, card_count, due_count,
+ *    decks: [{ id, title, category_id, card_count, due_count }] }]
+ */
+export async function getDashboardData() {
+  const { supabase, user } = await getContext();
+  const today = todayUTC();
+
+  const [categoriesRes, decksRes] = await Promise.all([
+    supabase
+      .from("categories")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("name", { ascending: true }),
+    supabase
       .from("decks")
-      .select("id, title, category_id")
-      .in("id", deckIds);
+      .select(DECK_WITH_COUNTS)
+      .eq("user_id", user.id)
+      .lte("due_cards.due_date", today)
+      .order("title", { ascending: true }),
+  ]);
+  if (categoriesRes.error) throw categoriesRes.error;
+  if (decksRes.error) throw decksRes.error;
 
-    if (decksError) throw new Error(decksError.message);
-
-    deckMap = (decks || []).reduce((acc, deck) => {
-      acc[deck.id] = { title: deck.title, category_id: deck.category_id };
-      return acc;
-    }, {});
+  const decksByCategory = {};
+  for (const deck of decksRes.data || []) {
+    (decksByCategory[deck.category_id] ||= []).push(shapeDeck(deck));
   }
 
-  return (cards || []).map((card) => ({
+  return (categoriesRes.data || []).map((category) => {
+    const decks = decksByCategory[category.id] || [];
+    return {
+      ...category,
+      deck_count: decks.length,
+      card_count: decks.reduce((s, d) => s + d.card_count, 0),
+      due_count: decks.reduce((s, d) => s + d.due_count, 0),
+      decks,
+    };
+  });
+}
+
+/** All due cards (summary fields) for the dashboard. */
+export async function getDueCards() {
+  const { supabase, user } = await getContext();
+  const today = todayUTC();
+
+  const cards = await fetchAll(() =>
+    supabase
+      .from("cards")
+      .select("id, question, due_date, deck_id, decks(title, category_id)")
+      .eq("user_id", user.id)
+      .lte("due_date", today)
+      .order("due_date", { ascending: true })
+      .order("id", { ascending: true }),
+  );
+
+  return cards.map(({ decks, ...card }) => ({
     ...card,
-    deck: deckMap[card.deck_id]?.title || "Untitled Deck",
-    category_id: deckMap[card.deck_id]?.category_id,
+    deck: decks?.title || "Untitled Deck",
+    category_id: decks?.category_id ?? null,
   }));
 }
 
@@ -85,244 +124,218 @@ export async function getDueCards() {
 // 2. FIND OR CREATE (Idempotent)
 // ==========================================
 
-export async function getOrCreateCategory(name) {
-  const supabase = await createClient();
+export async function getOrCreateCategory(rawName, ctx) {
+  const { supabase, user } = ctx || (await getContext());
+  const name = String(rawName || "").replace(/\s+/g, " ").trim() || "General";
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("Not authenticated");
+  // limit(1) instead of maybeSingle(): existing duplicate rows must not make
+  // the lookup "fail" and create yet another duplicate.
+  const find = () =>
+    supabase
+      .from("categories")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("name", name)
+      .order("id", { ascending: true })
+      .limit(1);
 
-  // 1. Ask ONLY for the "id" column to save bandwidth
-  const { data: existing } = await supabase
-    .from("categories")
-    .select("id")
-    .eq("name", name)
-    .eq("user_id", user.id)
-    .maybeSingle();
+  const { data: existing, error: findError } = await find();
+  if (findError) throw findError;
+  if (existing?.length) return existing[0].id;
 
-  if (existing) return existing.id;
-
-  // 2. Ask ONLY for the "id" column of the newly inserted row
   const { data: created, error } = await supabase
     .from("categories")
     .insert([{ name, user_id: user.id }])
     .select("id")
     .single();
 
-  if (error) throw error;
-
+  if (error) {
+    // Unique violation from a concurrent upload: use the winner's row.
+    if (error.code === "23505") {
+      const { data: again } = await find();
+      if (again?.length) return again[0].id;
+    }
+    throw error;
+  }
   return created.id;
 }
 
-export async function getOrCreateDeck(categoryId, title) {
-  const supabase = await createClient();
+/** Returns { id, created } for the deck with this title in the category. */
+export async function getOrCreateDeck(categoryId, rawTitle, ctx) {
+  const { supabase, user } = ctx || (await getContext());
+  const title = String(rawTitle || "").trim() || "Untitled Deck";
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("Not authenticated");
+  const find = () =>
+    supabase
+      .from("decks")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("category_id", categoryId)
+      .eq("title", title)
+      .order("id", { ascending: true })
+      .limit(1);
 
-  // 1. Fetch ONLY the ID if the deck already exists
-  const { data: existing } = await supabase
-    .from("decks")
-    .select("id")
-    .eq("category_id", categoryId)
-    .eq("title", title)
-    .eq("user_id", user.id)
-    .maybeSingle();
+  const { data: existing, error: findError } = await find();
+  if (findError) throw findError;
+  if (existing?.length) return { id: existing[0].id, created: false };
 
-  if (existing) return existing.id;
-
-  // 2. Return ONLY the ID of the newly created deck
   const { data: created, error } = await supabase
     .from("decks")
     .insert([{ category_id: categoryId, title, user_id: user.id }])
     .select("id")
     .single();
 
-  if (error) throw error;
-
-  return created.id;
+  if (error) {
+    if (error.code === "23505") {
+      const { data: again } = await find();
+      if (again?.length) return { id: again[0].id, created: false };
+    }
+    throw error;
+  }
+  return { id: created.id, created: true };
 }
 
-// 1. ADD CURLY BRACES HERE to accept a single object
-export async function createFlashcard({
-  deckId,
-  question,
-  optionsPayload,
-  correct_awnser, // (Note the spelling here so you match it in route.js!)
-  explanation,
-}) {
-  const supabase = await createClient();
+/**
+ * Insert many cards in ONE request. `questions` are normalized items
+ * ({ question, options, correct, explanation }). When `skipExisting` is set,
+ * questions whose text already exists in the deck are skipped (re-uploading
+ * the same PDF must not duplicate cards or reset their SM-2 progress).
+ * Returns { inserted, skipped }.
+ */
+export async function createFlashcards(deckId, questions, { skipExisting = false } = {}, ctx) {
+  const { supabase, user } = ctx || (await getContext());
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("Not authenticated");
+  let toInsert = questions;
+  if (skipExisting) {
+    const existing = await fetchAll(() =>
+      supabase
+        .from("cards")
+        .select("question")
+        .eq("deck_id", deckId)
+        .eq("user_id", user.id)
+        .order("id", { ascending: true }),
+    );
+    const seen = new Set(existing.map((c) => questionKey(c.question)));
+    toInsert = questions.filter((q) => !seen.has(questionKey(q.question)));
+  }
 
-  const repetitions = 0; // num repetitions since the last correct awnser. (Rating > 3) This is wll be zero if the user rates the card < 3
-  const ease_factor = 2.5; // The ease factor is used to determine the number of days to wait before reviewing again. Each call to SM-2 adjusts this number up or down based on quality.
-  const prev_interval = 0; // This previous interval is used when calculating the new interval. previous interval should equal zero for the first review.
+  if (toInsert.length === 0) {
+    return { inserted: 0, skipped: questions.length };
+  }
 
-  const { data, error } = await supabase
-    .from("cards")
-    .insert([
-      {
-        deck_id: deckId,
-        user_id: user.id,
-        question,
-        options: optionsPayload,
-        answer: correct_awnser, // Maps to your database column
-        explanation,
-        repetitions,
-        easiness_factor: ease_factor,
-        interval_days: prev_interval,
-      },
-    ])
-    .select()
-    .single();
+  const today = todayUTC();
+  const rows = toInsert.map((q) => ({
+    deck_id: deckId,
+    user_id: user.id,
+    question: q.question,
+    options: q.options,
+    answer: q.correct,
+    explanation: q.explanation,
+    repetitions: 0,
+    easiness_factor: 2.5,
+    interval_days: 0,
+    due_date: today, // new cards are due immediately
+  }));
 
+  const { error } = await supabase.from("cards").insert(rows);
   if (error) throw error;
 
-  return data;
+  return { inserted: rows.length, skipped: questions.length - rows.length };
 }
 
 export async function getAllCategories() {
-  const supabase = await createClient();
+  const { supabase, user } = await getContext();
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("Not authenticated");
-
-  const { data: existing, error: categoriesError } = await supabase
+  const { data, error } = await supabase
     .from("categories")
-    .select("*") // * gets all fields
-    .eq("user_id", user.id);
+    .select("*")
+    .eq("user_id", user.id)
+    .order("name", { ascending: true });
 
-  if (categoriesError) throw new Error(categoriesError.message);
-
-  return existing;
+  if (error) throw error;
+  return data || [];
 }
 
 // ==========================================
 // 3. SPACED REPETITION ENGINE
 // ==========================================
 
-export async function getDueDecksByCategory(categoryId) {
-  const supabase = await createClient();
+/**
+ * Decks in a category with counts: [{ id, title, category_id, card_count, due_count }].
+ * By default only decks with at least one due card; `includeAll` returns every deck.
+ */
+export async function getDueDecksByCategory(categoryId, { includeAll = false } = {}) {
+  const { supabase, user } = await getContext();
+  const today = todayUTC();
 
-  const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
-
-  // 1. Fetch the cards and tell Supabase to attach the related deck object
-  const { data: cards_due_today, error } = await supabase
-    .from("cards")
-    .select(
-      `
-      deck_id,
-      due_date,
-      decks!inner (*) 
-    `,
-    )
-    // Note: If cards doesn't have a category_id, we filter via the joined deck
-    .eq("decks.category_id", categoryId)
-    .lte("due_date", today);
+  const { data, error } = await supabase
+    .from("decks")
+    .select(DECK_WITH_COUNTS)
+    .eq("user_id", user.id)
+    .eq("category_id", categoryId)
+    .lte("due_cards.due_date", today)
+    .order("title", { ascending: true });
 
   if (error) throw error;
 
-  // 2. Quickly extract the unique full deck objects
-  const uniqueDecks = Array.from(
-    new Map(cards_due_today.map((card) => [card.deck_id, card.decks])).values(),
-  );
-
-  if (error) throw error;
-  return uniqueDecks;
+  const decks = (data || []).map(shapeDeck);
+  return includeAll ? decks : decks.filter((d) => d.due_count > 0);
 }
 
 export async function getDueCardsByDeck(deckId) {
-  const supabase = await createClient();
+  const { supabase, user } = await getContext();
+  const today = todayUTC();
 
-  const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
-
-  const { data, error } = await supabase
-    .from("cards") // was 'flashcards'
-    .select("*")
-    .eq("deck_id", deckId)
-    .lte("due_date", today) // was 'next_review' — matches your schema
-    .order("due_date", { ascending: true });
-
-  if (error) throw error;
-  return data;
-}
-export async function updateCard(card, userScore) {
-  const supabase = await createClient();
-  console.log("before: ", card);
-
-  const q = Math.max(0, Math.min(5, userScore));
-
-  // Fix: Use card. prefix for all properties
-  if (q >= 3) {
-    if (card.repetitions === 0) {
-      card.interval_days = 1;
-    } else if (card.repetitions === 1) {
-      card.interval_days = 6;
-    } else {
-      // FIX: Added card. prefixes here
-      card.interval_days = Math.ceil(card.interval_days * card.easiness_factor);
-    }
-    card.repetitions += 1;
-  } else {
-    card.repetitions = 0;
-    card.interval_days = 1;
-  }
-
-  // Calculate new Easiness Factor
-  card.easiness_factor = Math.max(
-    1.3,
-    card.easiness_factor + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02)),
+  return fetchAll(() =>
+    supabase
+      .from("cards")
+      .select("*")
+      .eq("deck_id", deckId)
+      .eq("user_id", user.id)
+      .lte("due_date", today)
+      .order("due_date", { ascending: true })
+      .order("id", { ascending: true }),
   );
+}
 
-  // Calculate Next Due Date
-  const nextDue = new Date();
-  // FIX: Added card. prefix here
-  nextDue.setDate(nextDue.getDate() + card.interval_days);
-  card.due_date = nextDue.toISOString().split("T")[0];
+/** Apply one SM-2 review. Returns { id, repetitions, easiness_factor, interval_days, due_date }. */
+export async function updateCard(cardId, quality) {
+  const { supabase, user } = await getContext();
+
+  // Load SM-2 state from the DB (never trust state sent by the client).
+  const { data: card, error: fetchError } = await supabase
+    .from("cards")
+    .select("id, repetitions, easiness_factor, interval_days")
+    .eq("id", cardId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (fetchError) throw fetchError;
+  if (!card) throw new HttpError(404, "Card not found");
+
+  const next = sm2(card, quality);
 
   const { error } = await supabase
     .from("cards")
-    .update({
-      repetitions: card.repetitions,
-      easiness_factor: card.easiness_factor,
-      interval_days: card.interval_days,
-      due_date: card.due_date,
-    })
-    .eq("id", card.id);
+    .update(next)
+    .eq("id", card.id)
+    .eq("user_id", user.id);
+  if (error) throw error;
 
-  if (error) {
-    console.error("Supabase Error:", error);
-    throw error;
-  }
+  return { id: card.id, ...next };
 }
 
 export async function getCardsByDeckId(deckId) {
-  const supabase = await createClient();
+  const { supabase, user } = await getContext();
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("Not authenticated");
-
-  const { data, error } = await supabase
-    .from("cards")
-    .select("*")
-    .eq("deck_id", deckId)
-    .eq("user_id", user.id)
-    .order("id", { ascending: true });
-
-  if (error) throw error;
-  return data;
+  return fetchAll(() =>
+    supabase
+      .from("cards")
+      .select("*")
+      .eq("deck_id", deckId)
+      .eq("user_id", user.id)
+      .order("id", { ascending: true }),
+  );
 }
 
-// THIS IS FOR THE CATEGORIES_DECK PAGE
-//
+/** Auth context for callers that run several db functions in one request. */
+export { getContext };

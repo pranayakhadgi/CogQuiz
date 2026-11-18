@@ -1,53 +1,73 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { processUploadedPdf } from "@/services/api";
+import { processUploadedPdf, isPdfFile } from "@/services/api";
 
 export default function UploadPage() {
   const router = useRouter();
+  const fileInputRef = useRef(null);
+  const dragDepth = useRef(0);
+  const mounted = useRef(true);
 
-  const [authLoading, setAuthLoading] = useState(true);
-  const [user, setUser] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
   const [dragOver, setDragOver] = useState(false);
-  const [cards, setCards] = useState([]);
+  const [fileName, setFileName] = useState("");
+  const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
-    const checkAuth = async () => {
-      setAuthLoading(false);
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
     };
-    checkAuth();
-  }, [router]);
+  }, []);
+
+  // Elapsed-time counter + leave-page warning while Gemini is working.
+  useEffect(() => {
+    if (!uploading) return;
+    const started = Date.now();
+    const timer = setInterval(
+      () => setElapsed(Math.floor((Date.now() - started) / 1000)),
+      1000,
+    );
+    const warn = (e) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("beforeunload", warn);
+    };
+  }, [uploading]);
 
   const handleUpload = async (file) => {
+    if (uploading) return;
+    if (!file) return;
+    if (!isPdfFile(file)) {
+      setError("Please upload a PDF file only.");
+      return;
+    }
+    setError(null);
+    setFileName(file.name);
+    setElapsed(0);
+    setUploading(true);
     try {
-      setError("");
-      setUploading(true);
       const newDeckId = await processUploadedPdf(file);
-      setUploading(false);
-      router.push(`/dashboard/`);
+      router.push(`/quiz?deckId=${encodeURIComponent(newDeckId)}`);
     } catch (err) {
-      setUploading(false);
-      setError(err.message);
+      if (err.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      if (mounted.current) {
+        setUploading(false);
+        setError(err.message || "Upload failed. Please try again.");
+      }
     }
   };
 
-  if (authLoading)
-    return (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          height: "100vh",
-          backgroundColor: "#f5f0e8",
-          color: "#6B4226",
-        }}
-      >
-        Checking session...
-      </div>
-    );
+  const openFilePicker = () => fileInputRef.current?.click();
 
   return (
     <div
@@ -131,6 +151,26 @@ export default function UploadPage() {
           zIndex: 1,
         }}
       >
+        <button
+          type="button"
+          onClick={() => router.push("/dashboard")}
+          disabled={uploading}
+          style={{
+            padding: "8px 16px",
+            marginBottom: "24px",
+            backgroundColor: "transparent",
+            color: "#6B4226",
+            border: "1px solid #6B4226",
+            borderRadius: "8px",
+            fontSize: "13px",
+            fontWeight: "600",
+            cursor: uploading ? "not-allowed" : "pointer",
+            opacity: uploading ? 0.5 : 1,
+          }}
+        >
+          ← Dashboard
+        </button>
+
         {/* Header */}
         <div style={{ marginBottom: "32px" }}>
           <h1
@@ -151,6 +191,7 @@ export default function UploadPage() {
         {/* Error */}
         {error && (
           <div
+            role="alert"
             style={{
               backgroundColor: "#fff0f0",
               border: "1px solid #ffcccc",
@@ -163,6 +204,8 @@ export default function UploadPage() {
           >
             ⚠️ {error}
             <button
+              type="button"
+              aria-label="Dismiss error"
               onClick={() => setError(null)}
               style={{
                 float: "right",
@@ -178,19 +221,46 @@ export default function UploadPage() {
         )}
 
         {/* Upload Box */}
-        {cards.length === 0 && !uploading && (
+        {!uploading && (
           <div
-            onDragOver={(e) => {
+            role="button"
+            tabIndex={0}
+            aria-label="Upload a PDF: drag and drop or press Enter to browse"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                openFilePicker();
+              }
+            }}
+            onDragEnter={(e) => {
               e.preventDefault();
+              dragDepth.current += 1;
               setDragOver(true);
             }}
-            onDragLeave={() => setDragOver(false)}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              // dragleave fires when moving over child elements; only clear
+              // the highlight once the pointer has left the whole drop zone.
+              dragDepth.current = Math.max(0, dragDepth.current - 1);
+              if (dragDepth.current === 0) setDragOver(false);
+            }}
             onDrop={(e) => {
               e.preventDefault();
+              dragDepth.current = 0;
               setDragOver(false);
-              handleUpload(e.dataTransfer.files[0]);
+              const files = e.dataTransfer?.files;
+              if (!files || files.length === 0) return;
+              if (files.length > 1) {
+                setError("Please drop one PDF at a time.");
+                return;
+              }
+              handleUpload(files[0]);
             }}
-            onClick={() => document.getElementById("fileInput").click()}
+            onClick={openFilePicker}
             style={{
               backgroundColor: dragOver ? "#f0e8dc" : "rgba(255,253,247,0.9)",
               border: `2px dashed ${dragOver ? "#6B4226" : "#d4c4b0"}`,
@@ -214,14 +284,22 @@ export default function UploadPage() {
               Drag & drop your PDF here
             </p>
             <p style={{ color: "#b09880", fontSize: "13px", margin: 0 }}>
-              or click to browse
+              or click to browse · PDF up to 4.5 MB
             </p>
             <input
-              id="fileInput"
+              ref={fileInputRef}
               type="file"
-              accept=".pdf"
+              accept="application/pdf,.pdf"
+              aria-hidden="true"
+              tabIndex={-1}
               style={{ display: "none" }}
-              onChange={(e) => handleUpload(e.target.files[0])}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                // Reset so choosing the same file again after an error still fires onChange.
+                e.target.value = "";
+                handleUpload(file);
+              }}
             />
           </div>
         )}
@@ -229,6 +307,8 @@ export default function UploadPage() {
         {/* Uploading State */}
         {uploading && (
           <div
+            role="status"
+            aria-live="polite"
             style={{
               backgroundColor: "rgba(255,253,247,0.95)",
               border: "1px solid #e8ddd0",
@@ -300,6 +380,21 @@ export default function UploadPage() {
             >
               Analyzing your PDF...
             </h2>
+            {fileName && (
+              <p
+                style={{
+                  color: "#6B4226",
+                  fontSize: "13px",
+                  fontWeight: "600",
+                  margin: "0 0 10px",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {fileName}
+              </p>
+            )}
             <p
               style={{
                 color: "#8a6a50",
@@ -309,7 +404,7 @@ export default function UploadPage() {
               }}
             >
               Gemini AI is reading your lecture and generating quiz questions.
-              This takes about 10–15 seconds.
+              This usually takes 30–60 seconds.
             </p>
 
             {/* Bouncing dots */}
@@ -338,101 +433,9 @@ export default function UploadPage() {
                 fontStyle: "italic",
               }}
             >
-              Do not close this page
+              {elapsed > 0 ? `${elapsed}s elapsed · ` : ""}Do not close this
+              page
             </p>
-          </div>
-        )}
-
-        {/* Success State */}
-        {cards.length > 0 && (
-          <div>
-            <div
-              style={{
-                backgroundColor: "#f0ede6",
-                border: "1px solid #d4c4b0",
-                borderRadius: "12px",
-                padding: "16px 20px",
-                marginBottom: "24px",
-                display: "flex",
-                alignItems: "center",
-                gap: "12px",
-              }}
-            >
-              <span style={{ fontSize: "24px" }}>✅</span>
-              <div>
-                <p style={{ margin: 0, fontWeight: "600", color: "#3d2b1f" }}>
-                  Quiz ready! {cards.length} questions generated.
-                </p>
-                <p style={{ margin: 0, fontSize: "13px", color: "#8a6a50" }}>
-                  Your study cards have been saved.
-                </p>
-              </div>
-            </div>
-
-            {cards[0] && (
-              <div
-                style={{
-                  backgroundColor: "#fffdf7",
-                  border: "1px solid #e8ddd0",
-                  borderRadius: "12px",
-                  padding: "20px",
-                  marginBottom: "16px",
-                }}
-              >
-                <p
-                  style={{
-                    color: "#8a6a50",
-                    fontSize: "12px",
-                    margin: "0 0 8px",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.5px",
-                  }}
-                >
-                  Preview — Question 1
-                </p>
-                <p
-                  style={{
-                    color: "#3d2b1f",
-                    fontWeight: "600",
-                    margin: "0 0 12px",
-                  }}
-                >
-                  {cards[0].question}
-                </p>
-                {cards[0].options?.map((opt, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      padding: "8px 12px",
-                      margin: "4px 0",
-                      backgroundColor: "#f5f0e8",
-                      borderRadius: "8px",
-                      color: "#6B4226",
-                      fontSize: "14px",
-                    }}
-                  >
-                    {opt}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <button
-              onClick={() => router.push("/quiz")}
-              style={{
-                width: "100%",
-                padding: "14px",
-                backgroundColor: "#6B4226",
-                color: "white",
-                border: "none",
-                borderRadius: "10px",
-                fontSize: "15px",
-                fontWeight: "600",
-                cursor: "pointer",
-              }}
-            >
-              Start Quiz →
-            </button>
           </div>
         )}
       </div>

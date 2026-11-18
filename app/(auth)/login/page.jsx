@@ -1,30 +1,71 @@
 "use client";
-import { useState } from "react";
-import { createClient } from "@/lib/supabase-browser";
+import { useState, useSyncExternalStore } from "react";
 import { signInWithGoogle, signInWithEmail } from "@/services/api";
+import Link from "next/link";
 import CogQuizLogo from "@/components/CogQuizLogo";
 
+const noopSubscribe = () => () => {};
+
+// True when /auth/callback redirected here with ?error=... after a failed
+// OAuth sign-in. Reads the URL on the client only (no hydration mismatch, and
+// the page stays statically prerendered without a Suspense boundary).
+function useCallbackError() {
+  return useSyncExternalStore(
+    noopSubscribe,
+    () => new URLSearchParams(window.location.search).has("error"),
+    () => false,
+  );
+}
+
 export default function LoginPage() {
+  const callbackFailed = useCallbackError();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [focused, setFocused] = useState("");
-  const [showPassword, setShowPassword] = useState(false); // ← add this
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState(null);
+  const [callbackDismissed, setCallbackDismissed] = useState(false);
+  const shownError =
+    error ??
+    (callbackFailed && !callbackDismissed
+      ? "Google sign-in didn't complete. Please try again or use email."
+      : null);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
-  const handleLogin = async () => {
+  const busy = loading || googleLoading;
+
+  const handleLogin = async (e) => {
+    e?.preventDefault();
+    if (busy) return;
+    if (!email.trim() || !password) {
+      setError("Please enter your email and password.");
+      return;
+    }
+    setError(null);
+    setCallbackDismissed(true);
     setLoading(true);
     try {
-      await signInWithEmail(email, password);
+      await signInWithEmail(email.trim(), password);
+      // Full reload so the server/proxy sees the new auth cookies.
       window.location.href = "/dashboard";
-    } catch (e) {
-      alert(e.message);
-    } finally {
+    } catch (err) {
+      setError(err.message || "Sign in failed. Please try again.");
       setLoading(false);
     }
   };
 
   const handleGoogleLogin = async () => {
-    await signInWithGoogle();
+    if (busy) return;
+    setError(null);
+    setCallbackDismissed(true);
+    setGoogleLoading(true);
+    const { error } = await signInWithGoogle();
+    // On success the browser navigates to Google; only reset on failure.
+    if (error) {
+      setError(error.message || "Google sign-in failed.");
+      setGoogleLoading(false);
+    }
   };
 
   return (
@@ -175,7 +216,9 @@ export default function LoginPage() {
       </div>
 
       {/* Card */}
-      <div
+      <form
+        onSubmit={handleLogin}
+        noValidate
         style={{
           backgroundColor: "#fffdf7",
           border: "1px solid #e8ddd0",
@@ -186,11 +229,15 @@ export default function LoginPage() {
           boxSizing: "border-box",
           boxShadow: "0 4px 24px rgba(101, 72, 42, 0.08)",
           animation: "fadeUp 0.5s ease",
+          position: "relative",
+          zIndex: 1,
         }}
       >
         {/* Google Button */}
         <button
+          type="button"
           onClick={handleGoogleLogin}
+          disabled={busy}
           style={{
             width: "100%",
             padding: "12px",
@@ -199,7 +246,8 @@ export default function LoginPage() {
             border: "1px solid #d4c4b0",
             borderRadius: "10px",
             fontSize: "15px",
-            cursor: "pointer",
+            cursor: busy ? "not-allowed" : "pointer",
+            opacity: busy && !googleLoading ? 0.6 : 1,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -210,7 +258,7 @@ export default function LoginPage() {
           onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#8B5E3C")}
           onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#d4c4b0")}
         >
-          <svg width="18" height="18" viewBox="0 0 18 18">
+          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
             <path
               fill="#4285F4"
               d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"
@@ -228,7 +276,7 @@ export default function LoginPage() {
               d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"
             />
           </svg>
-          Continue with Google
+          {googleLoading ? "Redirecting to Google..." : "Continue with Google"}
         </button>
 
         {/* Divider */}
@@ -245,9 +293,28 @@ export default function LoginPage() {
           <div style={{ flex: 1, height: "1px", backgroundColor: "#e0d5c8" }} />
         </div>
 
+        {/* Error */}
+        {shownError && (
+          <div
+            role="alert"
+            style={{
+              backgroundColor: "#fff0f0",
+              border: "1px solid #ffcccc",
+              borderRadius: "8px",
+              padding: "10px 14px",
+              marginBottom: "16px",
+              color: "#cc4444",
+              fontSize: "13px",
+            }}
+          >
+            ⚠️ {shownError}
+          </div>
+        )}
+
         {/* Email Input */}
         <div style={{ marginBottom: "12px" }}>
           <label
+            htmlFor="login-email"
             style={{
               fontSize: "13px",
               color: "#8a6a50",
@@ -259,7 +326,11 @@ export default function LoginPage() {
             Email
           </label>
           <input
+            id="login-email"
+            name="email"
             type="email"
+            autoComplete="email"
+            required
             placeholder="you@example.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -285,6 +356,7 @@ export default function LoginPage() {
         {/* Password Input */}
         <div style={{ marginBottom: "24px" }}>
           <label
+            htmlFor="login-password"
             style={{
               fontSize: "13px",
               color: "#8a6a50",
@@ -297,6 +369,10 @@ export default function LoginPage() {
           </label>
           <div style={{ position: "relative" }}>
             <input
+              id="login-password"
+              name="password"
+              autoComplete="current-password"
+              required
               type={showPassword ? "text" : "password"}
               placeholder="••••••••"
               value={password}
@@ -321,7 +397,10 @@ export default function LoginPage() {
               }}
             />
             <button
-              onClick={() => setShowPassword(!showPassword)}
+              type="button"
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              aria-pressed={showPassword}
+              onClick={() => setShowPassword((v) => !v)}
               style={{
                 position: "absolute",
                 right: "12px",
@@ -344,26 +423,26 @@ export default function LoginPage() {
 
         {/* Login Button */}
         <button
-          onClick={handleLogin}
-          disabled={loading}
+          type="submit"
+          disabled={busy}
           style={{
             width: "100%",
             padding: "13px",
-            backgroundColor: "#6B4226",
+            backgroundColor: loading ? "#a07850" : "#6B4226",
             color: "#fff8f0",
             border: "none",
             borderRadius: "10px",
             fontSize: "15px",
             fontWeight: "600",
-            cursor: loading ? "not-allowed" : "pointer",
+            cursor: busy ? "not-allowed" : "pointer",
             transition: "all 0.2s ease",
             boxShadow: "0 4px 14px rgba(107,66,38,0.3)",
           }}
           onMouseEnter={(e) => {
-            if (!loading) e.currentTarget.style.backgroundColor = "#8B5E3C";
+            if (!busy) e.currentTarget.style.backgroundColor = "#8B5E3C";
           }}
           onMouseLeave={(e) => {
-            if (!loading) e.currentTarget.style.backgroundColor = "#6B4226";
+            if (!busy) e.currentTarget.style.backgroundColor = "#6B4226";
           }}
         >
           {loading ? "Signing in..." : "Sign In"}
@@ -380,7 +459,7 @@ export default function LoginPage() {
           }}
         >
           Don&apos;t have an account?{" "}
-          <a
+          <Link
             href="/signup"
             style={{
               color: "#6B4226",
@@ -389,9 +468,9 @@ export default function LoginPage() {
             }}
           >
             Sign up
-          </a>
+          </Link>
         </p>
-      </div>
+      </form>
 
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -435,4 +514,3 @@ export default function LoginPage() {
     </div>
   );
 }
-
