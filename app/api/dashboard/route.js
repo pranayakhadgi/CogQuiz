@@ -1,14 +1,13 @@
 import { getDashboardData } from "@/services/db";
+import { errorResponse } from "@/lib/api-errors";
 
-export async function GET(request) {
+export const dynamic = "force-dynamic";
+
+export async function GET() {
   try {
     const data = await getDashboardData();
     return Response.json({ success: true, data });
   } catch (e) {
-    if (e.message === "Not authenticated") {
-      return Response.json({ error: "Not logged in" }, { status: 401 });
-    }
-
-    return Response.json({ error: e.message }, { status: 500 });
+    return errorResponse(e);
   }
 }

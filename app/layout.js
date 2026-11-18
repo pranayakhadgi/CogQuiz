@@ -16,6 +16,12 @@ export const metadata = {
   description: "Turn your lectures into quizzes with AI and spaced repetition.",
 };
 
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: "#f5f0e8",
+};
+
 export default function RootLayout({ children }) {
   return (
     <html

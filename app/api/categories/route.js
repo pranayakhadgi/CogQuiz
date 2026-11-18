@@ -1,15 +1,14 @@
 import { getAllCategories } from "@/services/db";
+import { errorResponse } from "@/lib/api-errors";
 
-export async function GET(request) {
+export const dynamic = "force-dynamic";
+
+export async function GET() {
   try {
-    const category = await getAllCategories();
-
-    return Response.json({ success: true, category });
+    const categories = await getAllCategories();
+    // `category` is kept for the existing frontend; `categories` is the clearer name.
+    return Response.json({ success: true, categories, category: categories });
   } catch (e) {
-    if (e.message === "Not authenticated") {
-      return Response.json({ error: "Not logged in" }, { status: 401 });
-    }
-
-    return Response.json({ error: e.message }, { status: 500 });
+    return errorResponse(e);
   }
 }

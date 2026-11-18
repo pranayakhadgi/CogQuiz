@@ -1,72 +1,117 @@
 "use client";
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, useMemo, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import CogQuizLogo from "@/components/CogQuizLogo";
 
-export default function CategoriesPage() {
+const onKeyActivate = (handler) => (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    handler();
+  }
+};
+
+function CategoriesContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [categories, setCategories] = useState([]);
   const [decksByCategory, setDecksByCategory] = useState({});
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [sortBy, setSortBy] = useState("newest");
-  const [expandedId, setExpandedId] = useState(null);
+  // Allow the dashboard to deep-link into an expanded category (?open=<id>).
+  const [expandedId, setExpandedId] = useState(() => searchParams.get("open"));
 
-  // make this faster
   useEffect(() => {
+    let active = true;
+
     const load = async () => {
       try {
-        const res = await fetch("/api/categories", { method: "GET" });
+        const res = await fetch("/api/categories", { cache: "no-store" });
+        if (res.status === 401) {
+          router.replace("/login");
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
         if (!res.ok) {
+          throw new Error(
+            data.error || `Couldn't load categories (HTTP ${res.status}).`,
+          );
         }
 
-        const data = await res.json();
-        const categories = data.category;
-        setCategories(categories);
+        const cats = Array.isArray(data.category) ? data.category : [];
 
-        // 3. Fetch all decks in parallel!
-        const decksMap = {};
-
-        await Promise.all(
-          categories.map(async (cat) => {
+        // Fetch each category's due decks in parallel; one failing category
+        // shouldn't break the whole page.
+        const entries = await Promise.all(
+          cats.map(async (cat) => {
             try {
-              // 1. Pass the category ID in the body so the API knows what to fetch!
-              const res = await fetch("/api/decks", {
+              const deckRes = await fetch("/api/decks", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ categoryId: cat.id }), // <-- Added this!
+                body: JSON.stringify({ categoryId: cat.id }),
               });
-
-              // 2. Parse the raw Response object into actual JSON data
-              const data = await res.json();
-
-              // Now data.success and data.decks actually exist!
-
-              // 3. Error checking!
-              if (data.success) {
-                decksMap[cat.id] = data.decks;
-              } else {
-                console.error(`API returned an error for category ${cat.id}`);
-                decksMap[cat.id] = [];
+              const deckData = await deckRes.json().catch(() => ({}));
+              if (
+                deckRes.ok &&
+                deckData.success &&
+                Array.isArray(deckData.decks)
+              ) {
+                return [cat.id, deckData.decks];
               }
-            } catch (error) {
-              // 4. Catch network crashes (e.g., user loses internet)
-              console.error(`Network error for category ${cat.id}:`, error);
-              decksMap[cat.id] = [];
+              console.error(
+                `Decks request failed for category ${cat.id}:`,
+                deckData.error || deckRes.status,
+              );
+            } catch (err) {
+              console.error(`Network error for category ${cat.id}:`, err);
             }
+            return [cat.id, []];
           }),
         );
-        setDecksByCategory(decksMap);
+
+        if (!active) return;
+        setCategories(cats);
+        setDecksByCategory(Object.fromEntries(entries));
+        setError(null);
       } catch (err) {
         console.error(err);
+        if (active) setError(err.message || "Couldn't load categories.");
       }
-      setLoading(false);
+      if (active) setLoading(false);
     };
     load();
-  }, []);
 
-  useEffect(() => {}, [categories, decksByCategory]); // Only logs when these change
+    return () => {
+      active = false;
+    };
+  }, [router, reloadKey]);
 
-  //{ we need to find the number of cards} cards •{" "}
+  const sortedCategories = useMemo(() => {
+    const dueCount = (cat) => (decksByCategory[cat.id] || []).length;
+    const created = (cat) => {
+      const t = Date.parse(cat.created_at);
+      return Number.isFinite(t) ? t : 0;
+    };
+    const list = [...categories];
+    if (sortBy === "name") {
+      list.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+    } else if (sortBy === "due") {
+      list.sort((a, b) => dueCount(b) - dueCount(a));
+    } else if (sortBy === "oldest") {
+      list.sort((a, b) => created(a) - created(b));
+    } else {
+      list.sort((a, b) => created(b) - created(a));
+    }
+    return list;
+  }, [categories, decksByCategory, sortBy]);
+
+  const handleRetry = () => {
+    setError(null);
+    setLoading(true);
+    setReloadKey((k) => k + 1);
+  };
+
   if (loading)
     return (
       <div
@@ -80,7 +125,7 @@ export default function CategoriesPage() {
           fontFamily: "'Inter', sans-serif",
         }}
       >
-        <div style={{ textAlign: "center" }}>
+        <div style={{ textAlign: "center" }} role="status">
           <div
             style={{
               width: "36px",
@@ -130,6 +175,7 @@ export default function CategoriesPage() {
           </span>
         </div>
         <button
+          type="button"
           onClick={() => router.push("/dashboard")}
           style={{
             padding: "8px 16px",
@@ -177,199 +223,317 @@ export default function CategoriesPage() {
               Categories
             </h1>
             <p style={{ color: "#8a6a50", margin: 0, fontSize: "14px" }}>
-              {categories.length} subjects
+              {categories.length}{" "}
+              {categories.length === 1 ? "subject" : "subjects"}
             </p>
           </div>
+          {categories.length > 1 && (
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                color: "#8a6a50",
+                fontSize: "13px",
+              }}
+            >
+              Sort
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: "8px",
+                  border: "1px solid #d4c4b0",
+                  backgroundColor: "rgba(255,253,247,0.9)",
+                  color: "#6B4226",
+                  fontSize: "13px",
+                  fontWeight: "600",
+                  cursor: "pointer",
+                }}
+              >
+                <option value="newest">Newest</option>
+                <option value="oldest">Oldest</option>
+                <option value="name">Name (A–Z)</option>
+                <option value="due">Most due</option>
+              </select>
+            </label>
+          )}
         </div>
+
+        {error && (
+          <div
+            role="alert"
+            style={{
+              backgroundColor: "#fff0f0",
+              border: "1px solid #ffcccc",
+              borderRadius: "10px",
+              padding: "14px 16px",
+              marginBottom: "20px",
+              color: "#cc4444",
+              fontSize: "14px",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: "12px",
+            }}
+          >
+            <span>⚠️ {error}</span>
+            <button
+              type="button"
+              onClick={handleRetry}
+              style={{
+                background: "none",
+                border: "1px solid #cc4444",
+                borderRadius: "8px",
+                padding: "4px 10px",
+                cursor: "pointer",
+                color: "#cc4444",
+                fontSize: "13px",
+                fontWeight: "600",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {!error && categories.length === 0 && (
+          <div
+            style={{
+              backgroundColor: "rgba(255,253,247,0.9)",
+              border: "1px solid rgba(232,221,208,0.9)",
+              borderRadius: "14px",
+              padding: "32px 20px",
+              textAlign: "center",
+            }}
+          >
+            <div style={{ fontSize: "40px", marginBottom: "12px" }}>📚</div>
+            <p
+              style={{ color: "#6B4226", fontWeight: "600", margin: "0 0 4px" }}
+            >
+              No categories yet
+            </p>
+            <p
+              style={{ color: "#8a6a50", fontSize: "13px", margin: "0 0 16px" }}
+            >
+              Upload a lecture PDF and we&apos;ll sort it into a category.
+            </p>
+            <button
+              type="button"
+              onClick={() => router.push("/upload")}
+              style={{
+                padding: "10px 20px",
+                backgroundColor: "#6B4226",
+                color: "white",
+                border: "none",
+                borderRadius: "8px",
+                fontSize: "13px",
+                fontWeight: "600",
+                cursor: "pointer",
+              }}
+            >
+              Upload PDF
+            </button>
+          </div>
+        )}
 
         {/* Categories List */}
         <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-          {categories.map((cat, i) => (
-            <div
-              key={cat.id}
-              style={{ animation: `fadeUp 0.3s ease ${i * 0.06}s both` }}
-            >
-              {/* Category Row */}
+          {sortedCategories.map((cat, i) => {
+            const decks = decksByCategory[cat.id] || [];
+            const isExpanded = String(expandedId) === String(cat.id);
+            const toggle = () => setExpandedId(isExpanded ? null : cat.id);
+            return (
               <div
-                onClick={() =>
-                  setExpandedId(expandedId === cat.id ? null : cat.id)
-                }
-                style={{
-                  backgroundColor: "rgba(255,253,247,0.9)",
-                  border: `1px solid ${expandedId === cat.id ? "#6B4226" : "rgba(232,221,208,0.9)"}`,
-                  borderRadius:
-                    expandedId === cat.id ? "14px 14px 0 0" : "14px",
-                  padding: "16px 20px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  cursor: "pointer",
-                  transition: "all 0.2s ease",
-                }}
-                className="category-row"
+                key={cat.id}
+                style={{ animation: `fadeUp 0.3s ease ${i * 0.06}s both` }}
               >
+                {/* Category Row */}
                 <div
-                  style={{ display: "flex", alignItems: "center", gap: "14px" }}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={isExpanded}
+                  onClick={toggle}
+                  onKeyDown={onKeyActivate(toggle)}
+                  style={{
+                    backgroundColor: "rgba(255,253,247,0.9)",
+                    border: `1px solid ${isExpanded ? "#6B4226" : "rgba(232,221,208,0.9)"}`,
+                    borderRadius: isExpanded ? "14px 14px 0 0" : "14px",
+                    padding: "16px 20px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    cursor: "pointer",
+                    transition: "all 0.2s ease",
+                  }}
+                  className="category-row"
                 >
                   <div
                     style={{
-                      width: "44px",
-                      height: "44px",
-                      backgroundColor: "#f5f0e8",
-                      borderRadius: "10px",
                       display: "flex",
                       alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: "20px",
-                      flexShrink: 0,
+                      gap: "14px",
                     }}
                   >
-                    📚
-                  </div>
-                  <div>
-                    <p
+                    <div
                       style={{
-                        color: "#3d2b1f",
-                        margin: "0 0 3px",
-                        fontSize: "15px",
-                        fontWeight: "600",
+                        width: "44px",
+                        height: "44px",
+                        backgroundColor: "#f5f0e8",
+                        borderRadius: "10px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: "20px",
+                        flexShrink: 0,
                       }}
                     >
-                      {cat.name}
-                    </p>
-                    <p
-                      style={{ color: "#8a6a50", margin: 0, fontSize: "12px" }}
-                    >
-                      {decksByCategory[cat.id].length || 0}{" "}
-                      {decksByCategory[cat.id].length === 1
-                        ? "due deck"
-                        : "due decks"}{" "}
-                    </p>
-                  </div>
-                </div>
-                <div
-                  style={{
-                    color: "#6B4226",
-                    fontSize: "18px",
-                    transition: "transform 0.2s ease",
-                    transform:
-                      expandedId === cat.id ? "rotate(90deg)" : "rotate(0deg)",
-                  }}
-                >
-                  →
-                </div>
-              </div>
-
-              {/* Expanded Decks */}
-              {expandedId === cat.id && (
-                <div
-                  style={{
-                    backgroundColor: "rgba(245,240,232,0.6)",
-                    border: "1px solid #6B4226",
-                    borderTop: "none",
-                    borderRadius: "0 0 14px 14px",
-                    padding: "8px 12px 12px",
-                  }}
-                >
-                  {decksByCategory[cat.id].length === 0 ? (
-                    <p
-                      style={{
-                        color: "#8a6a50",
-                        fontSize: "13px",
-                        textAlign: "center",
-                        padding: "12px 0",
-                        margin: 0,
-                      }}
-                    >
-                      No decks yet
-                    </p>
-                  ) : (
-                    decksByCategory[cat.id].map((deck, j) => (
-                      <div
-                        key={deck.id}
+                      📚
+                    </div>
+                    <div>
+                      <p
                         style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          padding: "12px 14px",
-                          margin: "6px 0",
-                          backgroundColor: "rgba(255,253,247,0.9)",
-                          borderRadius: "10px",
-                          gap: "12px",
-                          animation: `fadeUp 0.2s ease ${j * 0.04}s both`,
+                          color: "#3d2b1f",
+                          margin: "0 0 3px",
+                          fontSize: "15px",
+                          fontWeight: "600",
                         }}
                       >
+                        {cat.name}
+                      </p>
+                      <p
+                        style={{
+                          color: "#8a6a50",
+                          margin: 0,
+                          fontSize: "12px",
+                        }}
+                      >
+                        {decks.length}{" "}
+                        {decks.length === 1 ? "deck due" : "decks due"}
+                      </p>
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      color: "#6B4226",
+                      fontSize: "18px",
+                      transition: "transform 0.2s ease",
+                      transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
+                    }}
+                  >
+                    →
+                  </div>
+                </div>
+
+                {/* Expanded Decks */}
+                {isExpanded && (
+                  <div
+                    style={{
+                      backgroundColor: "rgba(245,240,232,0.6)",
+                      border: "1px solid #6B4226",
+                      borderTop: "none",
+                      borderRadius: "0 0 14px 14px",
+                      padding: "8px 12px 12px",
+                    }}
+                  >
+                    {decks.length === 0 ? (
+                      <p
+                        style={{
+                          color: "#8a6a50",
+                          fontSize: "13px",
+                          textAlign: "center",
+                          padding: "12px 0",
+                          margin: 0,
+                        }}
+                      >
+                        No decks due today — nice work!
+                      </p>
+                    ) : (
+                      decks.map((deck, j) => (
                         <div
+                          key={deck.id}
                           style={{
                             display: "flex",
                             alignItems: "center",
-                            gap: "10px",
-                            flex: 1,
-                            minWidth: 0,
+                            justifyContent: "space-between",
+                            padding: "12px 14px",
+                            margin: "6px 0",
+                            backgroundColor: "rgba(255,253,247,0.9)",
+                            borderRadius: "10px",
+                            gap: "12px",
+                            animation: `fadeUp 0.2s ease ${j * 0.04}s both`,
                           }}
                         >
-                          <div style={{ fontSize: "18px" }}>📄</div>
-                          <div style={{ minWidth: 0 }}>
-                            <p
-                              style={{
-                                color: "#3d2b1f",
-                                margin: "0 0 2px",
-                                fontSize: "13px",
-                                fontWeight: "600",
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {deck.title}
-                            </p>
-                            <p
-                              style={{
-                                color: "#8a6a50",
-                                margin: 0,
-                                fontSize: "11px",
-                              }}
-                            ></p>
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "10px",
+                              flex: 1,
+                              minWidth: 0,
+                            }}
+                          >
+                            <div style={{ fontSize: "18px" }}>📄</div>
+                            <div style={{ minWidth: 0 }}>
+                              <p
+                                style={{
+                                  color: "#3d2b1f",
+                                  margin: "0 0 2px",
+                                  fontSize: "13px",
+                                  fontWeight: "600",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {deck.title || "Untitled deck"}
+                              </p>
+                            </div>
                           </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              router.push(
+                                `/quiz?deckId=${encodeURIComponent(deck.id)}`,
+                              );
+                            }}
+                            style={{
+                              padding: "8px 16px",
+                              backgroundColor: "#6B4226",
+                              color: "white",
+                              border: "none",
+                              borderRadius: "8px",
+                              fontSize: "12px",
+                              fontWeight: "600",
+                              cursor: "pointer",
+                              whiteSpace: "nowrap",
+                              flexShrink: 0,
+                              transition:
+                                "transform 0.15s ease, background-color 0.15s ease",
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.transform =
+                                "translateY(-2px)";
+                              e.currentTarget.style.backgroundColor = "#8B5E3C";
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.transform = "translateY(0)";
+                              e.currentTarget.style.backgroundColor = "#6B4226";
+                            }}
+                          >
+                            Start Quiz →
+                          </button>
                         </div>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            router.push(`/quiz?deckId=${deck.id}`);
-                          }}
-                          style={{
-                            padding: "8px 16px",
-                            backgroundColor: "#6B4226",
-                            color: "white",
-                            border: "none",
-                            borderRadius: "8px",
-                            fontSize: "12px",
-                            fontWeight: "600",
-                            cursor: "pointer",
-                            whiteSpace: "nowrap",
-                            flexShrink: 0,
-                            transition:
-                              "transform 0.15s ease, background-color 0.15s ease",
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.transform =
-                              "translateY(-2px)";
-                            e.currentTarget.style.backgroundColor = "#8B5E3C";
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.transform = "translateY(0)";
-                            e.currentTarget.style.backgroundColor = "#6B4226";
-                          }}
-                        >
-                          Start Quiz →
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -384,5 +548,31 @@ export default function CategoriesPage() {
         }
       `}</style>
     </div>
+  );
+}
+
+function LoadingScreen() {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        height: "100vh",
+        backgroundColor: "#f5f0e8",
+        color: "#6B4226",
+        fontFamily: "'Inter', sans-serif",
+      }}
+    >
+      Loading categories...
+    </div>
+  );
+}
+
+export default function CategoriesPage() {
+  return (
+    <Suspense fallback={<LoadingScreen />}>
+      <CategoriesContent />
+    </Suspense>
   );
 }

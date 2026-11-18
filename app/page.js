@@ -10,8 +10,9 @@ export default function SplashScreen() {
   useEffect(() => {
     // After 2s start fade out
     const fadeOut = setTimeout(() => setPhase("exit"), 2000);
-    // After 2.5s go to login
-    const redirect = setTimeout(() => router.push("/login"), 2500);
+    // After 2.5s go to login (the proxy sends signed-in users on to /dashboard).
+    // replace() so Back doesn't return to the splash screen.
+    const redirect = setTimeout(() => router.replace("/login"), 2500);
     return () => {
       clearTimeout(fadeOut);
       clearTimeout(redirect);

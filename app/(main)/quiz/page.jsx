@@ -1,86 +1,179 @@
 "use client";
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { scheduleReviewSession } from "@/services/api";
+import {
+  getSession,
+  scheduleReviewSession,
+  submitCardReview,
+} from "@/services/api";
+import { recordAnswer } from "@/components/studyStats";
+
+const LETTERS = ["A", "B", "C", "D", "E", "F"];
+
+// Cards should have options {A,B,C,D} and answer 'A'-'D', but be tolerant of
+// arrays, JSON strings, numeric indexes, lowercase letters and "B." / "B)".
+function normalizeCard(c) {
+  let options = c.options;
+  if (typeof options === "string") {
+    try {
+      options = JSON.parse(options);
+    } catch {
+      options = {};
+    }
+  }
+  if (Array.isArray(options)) {
+    options = options.reduce((acc, opt, i) => {
+      acc[LETTERS[i] ?? String(i + 1)] = opt;
+      return acc;
+    }, {});
+  }
+  if (!options || typeof options !== "object") options = {};
+
+  let answer = c.answer;
+  if (typeof answer === "number") {
+    answer = LETTERS[answer];
+  } else if (typeof answer === "string") {
+    const trimmed = answer.trim();
+    const letter = trimmed.match(/^([A-Fa-f])(?:[.):\s]|$)/);
+    if (letter) {
+      answer = letter[1].toUpperCase();
+    } else {
+      // The answer may be the option text itself.
+      const match = Object.entries(options).find(
+        ([, text]) => String(text).trim() === trimmed,
+      );
+      answer = match ? match[0] : trimmed;
+    }
+  }
+
+  return { ...c, options, answer };
+}
+
+const RATINGS = [
+  { value: 0, label: "0", desc: "Blank" },
+  { value: 1, label: "1", desc: "Wrong" },
+  { value: 2, label: "2", desc: "Hard" },
+  { value: 3, label: "3", desc: "Struggled" },
+  { value: 4, label: "4", desc: "Good" },
+  { value: 5, label: "5", desc: "Easy" },
+];
 
 function QuizContent() {
-  const resolvedParams = useSearchParams();
-  const deckId = resolvedParams.get("deckId");
+  const searchParams = useSearchParams();
+  const deckId = searchParams.get("deckId");
   const router = useRouter();
   const [cards, setCards] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(deckId));
+  const [error, setError] = useState(null);
+  const [userId, setUserId] = useState(null);
+  const [authProvider, setAuthProvider] = useState(null);
   const [current, setCurrent] = useState(0);
   const [selected, setSelected] = useState(null);
   const [answered, setAnswered] = useState(false);
   const [score, setScore] = useState(0);
   const [finished, setFinished] = useState(false);
   const [rating, setRating] = useState(null);
+  // After the first full pass, a retry is practice only: the SM-2 schedule
+  // and the calendar were already updated, so don't submit reviews again.
+  const [practiceMode, setPracticeMode] = useState(false);
+  const [calendarNote, setCalendarNote] = useState(null);
 
   useEffect(() => {
+    if (!deckId) return;
+    let active = true;
+
     const loadCards = async () => {
-      if (!deckId) {
-        setLoading(false);
-        return;
-      }
       try {
-        const res = await fetch(`/api/cards?deckId=${deckId}`, {
-          method: "GET",
-        });
-        const data = await res.json();
-        if (data.success && data.cards && data.cards.length > 0) {
-          const normalized = data.cards.map((c) => ({
-            ...c,
-            options: Array.isArray(c.options)
-              ? c.options.reduce((acc, opt, i) => {
-                  acc[String.fromCharCode(65 + i)] = opt;
-                  return acc;
-                }, {})
-              : c.options,
-            answer:
-              typeof c.answer === "number"
-                ? String.fromCharCode(65 + c.answer)
-                : c.answer,
-          }));
-          setCards(normalized);
-        } else {
-          setCards([]);
+        const [session, res] = await Promise.all([
+          getSession().catch(() => null),
+          fetch(`/api/cards?deckId=${encodeURIComponent(deckId)}`, {
+            cache: "no-store",
+          }),
+        ]);
+        if (res.status === 401) {
+          router.replace("/login");
+          return;
         }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            data.error || `Couldn't load this quiz (HTTP ${res.status}).`,
+          );
+        }
+        if (!active) return;
+        setUserId(session?.user?.id ?? null);
+        setAuthProvider(session?.user?.app_metadata?.provider ?? null);
+        setCards(
+          Array.isArray(data.cards)
+            ? data.cards
+                .map(normalizeCard)
+                .filter((c) => Object.keys(c.options).length > 0)
+            : [],
+        );
       } catch (err) {
         console.error("Failed to load cards:", err);
+        if (active) setError(err.message || "Couldn't load this quiz.");
       }
-      setLoading(false);
+      if (active) setLoading(false);
     };
     loadCards();
-  }, [deckId]);
+
+    return () => {
+      active = false;
+    };
+  }, [deckId, router]);
 
   const handleAnswer = (option) => {
     if (answered) return;
+    const isCorrect = option === cards[current].answer;
     setSelected(option);
     setAnswered(true);
-    if (option === cards[current].answer) {
-      setScore((s) => s + 1);
-    }
+    if (isCorrect) setScore((s) => s + 1);
+    if (!practiceMode) recordAnswer(userId, isCorrect);
   };
 
-  const handleNext = async () => {
-    // Fire-and-forget SM-2 update; the server loads the card and recomputes its schedule.
-    fetch("/api/cards", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cardId: cards[current].id, userScore: rating }),
-    }).catch((e) => console.error("Error updating card", e.message));
+  const handleNext = () => {
+    if (rating === null) return;
+    const isLast = current + 1 >= cards.length;
 
-    if (current + 1 >= cards.length) {
-      //try {
-      //  await scheduleReviewSession({
-      //    deckId,
-      //    totalQuestions: cards.length,
-      //    mistakes: cards.length - score,
-      //    rating: rating,
-      //  });
-      //} catch (e) {
-      //  console.error("Calendar scheduling failed:", e.message);
-      //}
+    if (!practiceMode) {
+      // Non-blocking SM-2 update; the server recomputes the schedule.
+      submitCardReview(cards[current].id, rating).catch((e) => {
+        console.error("Error updating card:", e.message);
+        if (e.status === 401) router.replace("/login");
+      });
+    }
+
+    if (isLast) {
+      if (!practiceMode) {
+        // Non-blocking Google Calendar reminder. Only works for Google
+        // sign-ins (needs a Google token); email users get a 401/403 and we
+        // just skip it quietly.
+        scheduleReviewSession({
+          deckId,
+          totalQuestions: cards.length,
+          mistakes: cards.length - score,
+        })
+          .then((result) => {
+            if (result?.scheduled || result?.merged) {
+              setCalendarNote(
+                `📅 Next review on your Google Calendar: ${result.date}`,
+              );
+            }
+          })
+          .catch((e) => {
+            // Email/password users have no Google token: skip silently.
+            console.info("Calendar scheduling skipped:", e.message);
+            if (
+              authProvider === "google" &&
+              e.code === "GOOGLE_REAUTH_REQUIRED"
+            ) {
+              setCalendarNote(
+                "Sign in with Google again to add review reminders to your calendar.",
+              );
+            }
+          });
+      }
       setFinished(true);
     } else {
       setCurrent((c) => c + 1);
@@ -88,6 +181,16 @@ function QuizContent() {
       setAnswered(false);
       setRating(null);
     }
+  };
+
+  const handleRetry = () => {
+    setPracticeMode(true);
+    setCurrent(0);
+    setSelected(null);
+    setAnswered(false);
+    setRating(null);
+    setScore(0);
+    setFinished(false);
   };
 
   const getOptionStyle = (option) => {
@@ -142,6 +245,51 @@ function QuizContent() {
       </div>
     );
 
+  if (!deckId || error)
+    return (
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          height: "100vh",
+          backgroundColor: "#f5f0e8",
+          fontFamily: "'Inter', sans-serif",
+          color: "#3d2b1f",
+          padding: "20px",
+          boxSizing: "border-box",
+          textAlign: "center",
+        }}
+      >
+        <div style={{ fontSize: "48px", marginBottom: "16px" }}>
+          {error ? "⚠️" : "🗂️"}
+        </div>
+        <h2 style={{ margin: "0 0 8px" }}>
+          {error ? "Couldn't load this quiz" : "No deck selected"}
+        </h2>
+        <p style={{ color: "#8a6a50" }} role={error ? "alert" : undefined}>
+          {error || "Pick a deck from your categories to start a quiz."}
+        </p>
+        <button
+          type="button"
+          onClick={() => router.push(error ? "/dashboard" : "/categories_deck")}
+          style={{
+            marginTop: "20px",
+            padding: "12px 32px",
+            backgroundColor: "#6B4226",
+            color: "white",
+            border: "none",
+            borderRadius: "10px",
+            fontSize: "15px",
+            cursor: "pointer",
+          }}
+        >
+          {error ? "Back to Dashboard" : "Browse Categories"}
+        </button>
+      </div>
+    );
+
   if (cards.length === 0)
     return (
       <div
@@ -158,8 +306,28 @@ function QuizContent() {
       >
         <div style={{ fontSize: "48px", marginBottom: "16px" }}>📭</div>
         <h2 style={{ margin: "0 0 8px" }}>No cards due today!</h2>
-        <p style={{ color: "#8a6a50" }}>Upload a lecture to get started.</p>
+        <p style={{ color: "#8a6a50" }}>
+          This deck is all caught up. Check back later or upload another
+          lecture.
+        </p>
         <button
+          type="button"
+          onClick={() => router.push("/dashboard")}
+          style={{
+            marginTop: "20px",
+            padding: "12px 32px",
+            backgroundColor: "transparent",
+            color: "#6B4226",
+            border: "1px solid #6B4226",
+            borderRadius: "10px",
+            fontSize: "15px",
+            cursor: "pointer",
+          }}
+        >
+          Back to Dashboard
+        </button>
+        <button
+          type="button"
           onClick={() => router.push("/upload")}
           style={{
             marginTop: "20px",
@@ -201,9 +369,23 @@ function QuizContent() {
               : "📖"}
         </div>
         <h1 style={{ fontSize: "2rem", margin: "0 0 8px" }}>Quiz Complete!</h1>
-        <p style={{ color: "#8a6a50", marginBottom: "32px" }}>
+        <p
+          style={{
+            color: "#8a6a50",
+            marginBottom: calendarNote ? "8px" : "32px",
+          }}
+        >
           You got {score} out of {cards.length} correct
+          {practiceMode ? " (practice round)" : ""}
         </p>
+        {calendarNote && (
+          <p
+            role="status"
+            style={{ color: "#6B4226", fontSize: "13px", margin: "0 0 24px" }}
+          >
+            {calendarNote}
+          </p>
+        )}
         <div
           style={{
             width: "100%",
@@ -234,6 +416,7 @@ function QuizContent() {
                 : "Keep practicing, you'll get there!"}
           </p>
           <button
+            type="button"
             onClick={() => router.push("/dashboard")}
             style={{
               width: "100%",
@@ -251,13 +434,8 @@ function QuizContent() {
             View Dashboard
           </button>
           <button
-            onClick={() => {
-              setCurrent(0);
-              setSelected(null);
-              setAnswered(false);
-              setScore(0);
-              setFinished(false);
-            }}
+            type="button"
+            onClick={handleRetry}
             style={{
               width: "100%",
               padding: "13px",
@@ -277,6 +455,10 @@ function QuizContent() {
     );
 
   const card = cards[current];
+  const isCorrect = answered && isCorrect;
+  // Keep the self-rating consistent with the actual result: SM-2 treats
+  // 0-2 as a failed recall and 3-5 as a successful one.
+  const allowedRatings = isCorrect ? [3, 4, 5] : [0, 1, 2];
 
   return (
     <div
@@ -364,8 +546,11 @@ function QuizContent() {
         <div style={{ marginBottom: "16px" }}>
           {Object.entries(card.options).map(([key, value]) => (
             <button
+              type="button"
               key={key}
               onClick={() => handleAnswer(key)}
+              disabled={answered}
+              aria-pressed={selected === key}
               style={getOptionStyle(key)}
             >
               {key}. {value}
@@ -377,8 +562,8 @@ function QuizContent() {
         {answered && (
           <div
             style={{
-              backgroundColor: selected === card.answer ? "#d4edda" : "#fde8e8",
-              border: `1px solid ${selected === card.answer ? "#82c98a" : "#e88282"}`,
+              backgroundColor: isCorrect ? "#d4edda" : "#fde8e8",
+              border: `1px solid ${isCorrect ? "#82c98a" : "#e88282"}`,
               borderRadius: "12px",
               padding: "16px",
               marginBottom: "16px",
@@ -389,20 +574,34 @@ function QuizContent() {
               style={{
                 margin: "0 0 4px",
                 fontWeight: "600",
-                color: selected === card.answer ? "#2d6a35" : "#8b2020",
+                color: isCorrect ? "#2d6a35" : "#8b2020",
               }}
             >
-              {selected === card.answer ? "✅ Correct!" : "❌ Incorrect"}
+              {isCorrect ? "✅ Correct!" : "❌ Incorrect"}
             </p>
-            <p
-              style={{
-                margin: 0,
-                fontSize: "14px",
-                color: selected === card.answer ? "#2d6a35" : "#8b2020",
-              }}
-            >
-              {card.explanation}
-            </p>
+            {!isCorrect && card.options[card.answer] !== undefined && (
+              <p
+                style={{
+                  margin: "0 0 4px",
+                  fontSize: "14px",
+                  fontWeight: "600",
+                  color: "#8b2020",
+                }}
+              >
+                Correct answer: {card.answer}. {card.options[card.answer]}
+              </p>
+            )}
+            {card.explanation && (
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: "14px",
+                  color: isCorrect ? "#2d6a35" : "#8b2020",
+                }}
+              >
+                {card.explanation}
+              </p>
+            )}
           </div>
         )}
 
@@ -438,41 +637,47 @@ function QuizContent() {
                 marginBottom: "10px",
               }}
             >
-              {[
-                { value: 0, label: "0", desc: "Blank" },
-                { value: 1, label: "1", desc: "Wrong" },
-                { value: 2, label: "2", desc: "Hard" },
-                { value: 3, label: "3", desc: "Struggled" },
-                { value: 4, label: "4", desc: "Good" },
-                { value: 5, label: "5", desc: "Easy" },
-              ].map((r) => (
-                <button
-                  key={r.value}
-                  onClick={() => setRating(r.value)}
-                  style={{
-                    padding: "10px 4px",
-                    borderRadius: "10px",
-                    border: `2px solid ${rating === r.value ? "#6B4226" : "#d4c4b0"}`,
-                    backgroundColor: rating === r.value ? "#6B4226" : "#f5f0e8",
-                    color: rating === r.value ? "white" : "#6B4226",
-                    fontSize: "15px",
-                    fontWeight: "700",
-                    cursor: "pointer",
-                    transition: "all 0.15s ease",
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    gap: "3px",
-                  }}
-                >
-                  <span>{r.label}</span>
-                  <span
-                    style={{ fontSize: "9px", fontWeight: "400", opacity: 0.8 }}
+              {RATINGS.map((r) => {
+                const allowed = allowedRatings.includes(r.value);
+                return (
+                  <button
+                    type="button"
+                    key={r.value}
+                    onClick={() => setRating(r.value)}
+                    disabled={!allowed}
+                    aria-pressed={rating === r.value}
+                    aria-label={`${r.label} - ${r.desc}`}
+                    style={{
+                      padding: "10px 4px",
+                      borderRadius: "10px",
+                      border: `2px solid ${rating === r.value ? "#6B4226" : "#d4c4b0"}`,
+                      backgroundColor:
+                        rating === r.value ? "#6B4226" : "#f5f0e8",
+                      color: rating === r.value ? "white" : "#6B4226",
+                      fontSize: "15px",
+                      fontWeight: "700",
+                      cursor: allowed ? "pointer" : "not-allowed",
+                      opacity: allowed ? 1 : 0.35,
+                      transition: "all 0.15s ease",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      gap: "3px",
+                    }}
                   >
-                    {r.desc}
-                  </span>
-                </button>
-              ))}
+                    <span>{r.label}</span>
+                    <span
+                      style={{
+                        fontSize: "9px",
+                        fontWeight: "400",
+                        opacity: 0.8,
+                      }}
+                    >
+                      {r.desc}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
             <p
               style={{
@@ -497,6 +702,7 @@ function QuizContent() {
         {/* Next button */}
         {answered && (
           <button
+            type="button"
             onClick={handleNext}
             disabled={rating === null}
             style={{
@@ -548,7 +754,7 @@ export default function QuizPage() {
             fontFamily: "'Inter', sans-serif",
           }}
         >
-          Initializing quiz...
+          Loading your quiz...
         </div>
       }
     >
